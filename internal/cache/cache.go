@@ -254,3 +254,17 @@ func SchemaKey(project, dataset, table string) string {
 func MetadataKey(project, dataset, table string) string {
 	return fmt.Sprintf("metadata:%s.%s.%s", project, dataset, table)
 }
+
+// Exists checks if a key exists in the cache (without retrieving the data)
+func (c *Cache) Exists(key string) (bool, error) {
+	query := `SELECT 1 FROM cache WHERE key = ? AND expires_at > ?`
+	var exists int
+	err := c.db.QueryRow(query, key, time.Now()).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

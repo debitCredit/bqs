@@ -22,6 +22,16 @@ func NewClient(c *cache.Cache) *Client {
 	}
 }
 
+// IsTableMetadataCached checks if table metadata is available in cache
+func (c *Client) IsTableMetadataCached(project, dataset, table string) bool {
+	key := cache.MetadataKey(project, dataset, table)
+	exists, err := c.cache.Exists(key)
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
 // TableInfo represents BigQuery table metadata
 type TableInfo struct {
 	TableID          string         `json:"tableId"`
