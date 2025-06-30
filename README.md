@@ -10,9 +10,9 @@ BQS is a Go-based command-line tool that transforms BigQuery exploration from co
 
 ### 🚀 Interactive Dataset Browser
 - **Terminal UI**: Navigate datasets with keyboard shortcuts
-- **Real-time Exploration**: Browse tables, view schemas, and explore metadata
+- **Fast & Scalable**: Browse thousands of tables instantly with basic info
+- **Rich Detail Views**: Get complete metadata when exploring specific tables
 - **Cache Indicators**: Visual markers (✓) show which tables are cached for instant access
-- **Detailed Mode**: Optional flag to fetch complete metadata (size, row counts)
 
 ### ⚡ Smart Caching
 - **Persistent Storage**: SQLite-based cache survives between sessions
@@ -41,11 +41,11 @@ go build -o bqs
 
 ### Browse a Dataset Interactively
 ```bash
-# Fast browsing (creation times only)
+# Browse dataset with fast, scalable table list
 bqs browse my-project.analytics
 
-# Detailed browsing (includes sizes and row counts)
-bqs browse -d my-project.analytics
+# Explore specific table with complete metadata
+bqs browse my-project.analytics.events
 ```
 
 ### View Table Metadata
@@ -84,12 +84,11 @@ Explore BigQuery datasets interactively with a terminal-based UI.
 bqs browse [flags] PROJECT.DATASET
 ```
 
-**Flags:**
-- `--detailed, -d` - Fetch detailed metadata (size, row counts) for each table
-
 **Features:**
-- Navigate tables with arrow keys or vim-style controls
+- Navigate tables with arrow keys or vim-style controls  
 - Visual cache indicators (✓) for fast table access
+- Fast browsing of thousands of tables with basic info
+- Rich metadata views when exploring specific tables
 - Expandable schema exploration with nested fields
 - Seamless fallback to static mode if terminal UI fails
 
@@ -190,8 +189,6 @@ $ bqs schema my-project.web_analytics.events
 - `--project` - Override the default GCP project
 - `--editor` - Set preferred editor (vim, code, zed, etc.)
 
-### Browse Command
-- `--detailed, -d` - Fetch detailed metadata (size, row counts)
 
 ### Environment Variables
 - `BQS_CACHE_DIR` - Custom cache directory

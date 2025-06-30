@@ -24,18 +24,14 @@ Navigate tables and views with keyboard controls, view schemas, and explore
 your BigQuery resources without writing queries.
 
 Examples:
-  bqs browse my-project.analytics          # Browse analytics dataset (fast)
-  bqs browse -d my-project.analytics       # Browse with detailed metadata (slower)
+  bqs browse my-project.analytics          # Browse analytics dataset
   bqs browse my-project.analytics.table    # Deep dive into specific table`,
 	Args: cobra.ExactArgs(1),
 	RunE: runBrowse,
 }
 
-var detailedMode bool
-
 func init() {
 	rootCmd.AddCommand(browseCmd)
-	browseCmd.Flags().BoolVarP(&detailedMode, "detailed", "d", false, "Fetch detailed metadata (size, rows) for each table - slower but complete")
 }
 
 func runBrowse(cmd *cobra.Command, args []string) error {
@@ -69,13 +65,13 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	if _, err := p.Run(); err != nil {
 		// Fallback to static listing if interactive mode fails
-		return runStaticBrowse(project, dataset, table, bqClient, detailedMode)
+		return runStaticBrowse(project, dataset, table, bqClient)
 	}
 
 	return nil
 }
 
-func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client, detailed bool) error {
+func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client) error {
 	if tableName != "" {
 		// Show specific table metadata
 		metadata, err := client.GetTableMetadata(project, dataset, tableName)
@@ -122,80 +118,27 @@ func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client
 	t := prettytable.NewWriter()
 	t.SetStyle(prettytable.StyleRounded)
 
-	if detailed {
-		fmt.Println("🔄 Fetching detailed metadata for each table...")
-		t.AppendHeader(prettytable.Row{"", "Table", "Type", "Rows", "Size", "Modified"})
+	t.AppendHeader(prettytable.Row{"", "Table", "Type", "Created"})
 
-		for _, tbl := range tables {
-			tableName := tbl.TableID
-			if tableName == "" {
-				tableName = tbl.TableReference.TableID
-			}
-
-			icon := bigquery.GetTableTypeIcon(tbl.Type)
-
-			// Fetch detailed metadata
-			metadata, err := client.GetTableMetadata(project, dataset, tableName)
-			if err != nil {
-				// Fallback to basic info if detailed fetch fails
-				t.AppendRow(prettytable.Row{
-					icon,
-					tableName,
-					tbl.Type,
-					"Error",
-					"Error",
-					bigquery.FormatTime(tbl.CreationTime),
-				})
-				continue
-			}
-
-			rows := "0"
-			if metadata.NumRows > 0 {
-				rows = fmt.Sprintf("%d", metadata.NumRows)
-			}
-
-			size := bigquery.FormatSize(metadata.NumBytes)
-			modified := bigquery.FormatTime(metadata.LastModifiedTime)
-
-			t.AppendRow(prettytable.Row{
-				icon,
-				tableName,
-				tbl.Type,
-				rows,
-				size,
-				modified,
-			})
+	for _, tbl := range tables {
+		tableName := tbl.TableID
+		if tableName == "" {
+			tableName = tbl.TableReference.TableID
 		}
-	} else {
-		t.AppendHeader(prettytable.Row{"", "Table", "Type", "Created"})
 
-		for _, tbl := range tables {
-			tableName := tbl.TableID
-			if tableName == "" {
-				tableName = tbl.TableReference.TableID
-			}
+		icon := bigquery.GetTableTypeIcon(tbl.Type)
+		created := bigquery.FormatTime(tbl.CreationTime)
 
-			icon := bigquery.GetTableTypeIcon(tbl.Type)
-			created := bigquery.FormatTime(tbl.CreationTime)
-
-			t.AppendRow(prettytable.Row{
-				icon,
-				tableName,
-				tbl.Type,
-				created,
-			})
-		}
+		t.AppendRow(prettytable.Row{
+			icon,
+			tableName,
+			tbl.Type,
+			created,
+		})
 	}
 
 	fmt.Println(t.Render())
-
-	if detailed {
-		fmt.Printf("\n💡 Detailed metadata fetched for %d tables\n", len(tables))
-	} else {
-		fmt.Printf("\n💡 Use --detailed flag for size and row count information\n")
-	}
-
-	fmt.Printf("Use 'bqs browse %s.%s.TABLE_NAME' to explore specific tables\n", project, dataset)
+	fmt.Printf("\nUse 'bqs browse %s.%s.TABLE_NAME' to explore specific tables\n", project, dataset)
 
 	return nil
 }
@@ -249,7 +192,7 @@ type schemaNode struct {
 }
 
 func newBrowserModel(project, dataset, tableName string, client *bigquery.Client) *browserModel {
-	// Initialize the table component with proper styling
+	// Initialize the table component with simple, fast columns
 	columns := []table.Column{
 		{Title: "Cache", Width: 5},     // Prefetch status
 		{Title: "Table", Width: 35},    // Table name
@@ -718,9 +661,8 @@ func (m *browserModel) updateTableRows() {
 			cacheStatus = "✓" // Cached
 		}
 
-		// Use creation time from TableInfo (always available)
+		// Always show basic, fast info - creation time is always available
 		created := bigquery.FormatTime(tbl.CreationTime)
-
 		rows[i] = table.Row{cacheStatus, tableID, tbl.Type, created}
 	}
 
@@ -770,6 +712,7 @@ type tableMetadataLoadedMsg struct {
 	metadata *bigquery.TableMetadata
 }
 
+
 type errorMsg struct {
 	err error
 }
@@ -777,6 +720,7 @@ type errorMsg struct {
 // Commands for async operations
 func loadTableList(client *bigquery.Client, project, dataset string) tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
+		// Always start with fast basic table list
 		tables, err := client.ListTables(project, dataset)
 		if err != nil {
 			return errorMsg{err}
