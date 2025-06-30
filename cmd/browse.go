@@ -224,6 +224,16 @@ type browserModel struct {
 	// Table detail state
 	metadata *bigquery.TableMetadata
 	
+	// Schema tree state
+	schemaNodes    []schemaNode
+	selectedSchema int
+	expandedNodes  map[string]bool
+	
+	// Prefetch state
+	prefetchedTables map[string]*bigquery.TableMetadata
+	prefetchQueue    []string
+	prefetchInProgress map[string]bool
+	
 	// UI state
 	loading    bool
 	err        error
@@ -231,13 +241,24 @@ type browserModel struct {
 	height     int
 }
 
+// schemaNode represents a node in the schema tree
+type schemaNode struct {
+	Field    bigquery.SchemaField
+	Path     string // Unique path for tracking expansion state
+	Level    int    // Nesting level for indentation
+	HasChildren bool
+}
+
 func newBrowserModel(project, dataset, table string, client *bigquery.Client) *browserModel {
 	model := &browserModel{
-		project: project,
-		dataset: dataset,
-		table:   table,
-		client:  client,
-		loading: true,
+		project:            project,
+		dataset:            dataset,
+		table:              table,
+		client:             client,
+		loading:            true,
+		expandedNodes:      make(map[string]bool),
+		prefetchedTables:   make(map[string]*bigquery.TableMetadata),
+		prefetchInProgress: make(map[string]bool),
 	}
 	
 	if table != "" {
@@ -273,13 +294,33 @@ func (m *browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.tables = msg.tables
 		m.state = stateTableList
-		return m, nil
+		m.buildPrefetchQueue()
+		return m, startPrefetch
 		
 	case tableMetadataLoadedMsg:
 		m.loading = false
 		m.metadata = msg.metadata
 		m.state = stateTableDetail
+		m.buildSchemaTree()
 		return m, nil
+		
+	case tablePrefetchedMsg:
+		// Store prefetched metadata
+		m.prefetchedTables[msg.tableID] = msg.metadata
+		delete(m.prefetchInProgress, msg.tableID)
+		
+		// Continue prefetching next table
+		return m, m.continueNextPrefetch()
+		
+	case prefetchErrorMsg:
+		// Remove from progress tracking (silently fail prefetch)
+		delete(m.prefetchInProgress, msg.tableID)
+		
+		// Continue prefetching next table
+		return m, m.continueNextPrefetch()
+		
+	case startPrefetchMsg:
+		return m, m.startNextPrefetch()
 		
 	case errorMsg:
 		m.loading = false
@@ -319,20 +360,69 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.state == stateTableList && m.selectedIdx > 0 {
 			m.selectedIdx--
+		} else if m.state == stateTableDetail && m.selectedSchema > 0 {
+			m.selectedSchema--
 		}
 		
 	case "down", "j":
 		if m.state == stateTableList && m.selectedIdx < len(m.tables)-1 {
 			m.selectedIdx++
+		} else if m.state == stateTableDetail && m.selectedSchema < len(m.schemaNodes)-1 {
+			m.selectedSchema++
 		}
 		
 	case "enter":
 		if m.state == stateTableList && len(m.tables) > 0 {
 			table := m.tables[m.selectedIdx]
-			m.table = table.TableID
-			m.loading = true
-			m.state = stateLoading
-			return m, loadTableMetadata(m.client, m.project, m.dataset, table.TableID)
+			tableID := table.TableID
+			if tableID == "" {
+				tableID = table.TableReference.TableID
+			}
+			
+			m.table = tableID
+			
+			// Check if we have prefetched data
+			if prefetched, exists := m.prefetchedTables[tableID]; exists {
+				// Use prefetched data immediately
+				m.metadata = prefetched
+				m.state = stateTableDetail
+				m.buildSchemaTree()
+				return m, nil
+			} else {
+				// Fallback to loading
+				m.loading = true
+				m.state = stateLoading
+				return m, loadTableMetadata(m.client, m.project, m.dataset, tableID)
+			}
+		}
+		
+	case "space", "right", "l":
+		// Expand/collapse schema nodes
+		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
+			node := m.schemaNodes[m.selectedSchema]
+			if node.HasChildren {
+				m.expandedNodes[node.Path] = !m.expandedNodes[node.Path]
+				m.buildSchemaTree() // Rebuild tree with new expansion state
+			}
+		}
+		
+	case "left", "h":
+		// Collapse current node or move to parent
+		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
+			node := m.schemaNodes[m.selectedSchema]
+			if m.expandedNodes[node.Path] {
+				// Collapse current node
+				m.expandedNodes[node.Path] = false
+				m.buildSchemaTree()
+			} else if node.Level > 0 {
+				// Move to parent node
+				for i := m.selectedSchema - 1; i >= 0; i-- {
+					if m.schemaNodes[i].Level < node.Level {
+						m.selectedSchema = i
+						break
+					}
+				}
+			}
 		}
 		
 	case "b", "backspace":
@@ -340,6 +430,8 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = stateTableList
 			m.table = ""
 			m.metadata = nil
+			m.schemaNodes = nil
+			m.selectedSchema = 0
 		}
 	}
 	
@@ -384,6 +476,11 @@ func (m *browserModel) renderTableList() string {
 					Padding(0, 1)
 			}
 			
+			tableID := table.TableID
+			if tableID == "" {
+				tableID = table.TableReference.TableID
+			}
+			
 			icon := bigquery.GetTableTypeIcon(table.Type)
 			size := bigquery.FormatSize(table.NumBytes)
 			lastMod := bigquery.FormatTime(table.LastModifiedTime)
@@ -392,8 +489,16 @@ func (m *browserModel) renderTableList() string {
 				rows = fmt.Sprintf("%d rows", table.NumRows)
 			}
 			
-			line := fmt.Sprintf("%s %-30s %8s %10s %s", 
-				icon, table.TableID, size, rows, lastMod)
+			// Add prefetch status indicator
+			prefetchStatus := " "
+			if _, isPrefetched := m.prefetchedTables[tableID]; isPrefetched {
+				prefetchStatus = "✓" // Cached
+			} else if m.prefetchInProgress[tableID] {
+				prefetchStatus = "⏳" // Loading
+			}
+			
+			line := fmt.Sprintf("%s%s %-29s %8s %10s %s", 
+				icon, prefetchStatus, tableID, size, rows, lastMod)
 			
 			content.WriteString(style.Render(line))
 			content.WriteString("\n")
@@ -443,7 +548,7 @@ func (m *browserModel) renderTableDetail() string {
 	content.WriteString("\n\n")
 	
 	// Schema
-	if m.metadata.Schema != nil {
+	if m.metadata.Schema != nil && len(m.schemaNodes) > 0 {
 		schemaStyle := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("39")).
@@ -452,20 +557,55 @@ func (m *browserModel) renderTableDetail() string {
 		content.WriteString(schemaStyle.Render("🌲 Schema:"))
 		content.WriteString("\n\n")
 		
-		for _, field := range m.metadata.Schema.Fields {
-			fieldStyle := lipgloss.NewStyle().Padding(0, 2)
+		for i, node := range m.schemaNodes {
+			selected := i == m.selectedSchema
 			
+			var style lipgloss.Style
+			if selected {
+				style = lipgloss.NewStyle().
+					Background(lipgloss.Color("62")).
+					Foreground(lipgloss.Color("230")).
+					Padding(0, 1)
+			} else {
+				style = lipgloss.NewStyle().Padding(0, 1)
+			}
+			
+			// Build indentation
+			indent := strings.Repeat("  ", node.Level)
+			
+			// Build tree connector
+			connector := "├─"
+			if node.Level == 0 {
+				connector = "├─"
+			} else {
+				connector = "├─"
+			}
+			
+			// Build expansion indicator
+			expandIcon := ""
+			if node.HasChildren {
+				if m.expandedNodes[node.Path] {
+					expandIcon = "▼ "
+				} else {
+					expandIcon = "▶ "
+				}
+			} else {
+				expandIcon = "  "
+			}
+			
+			// Build mode indicator
 			mode := ""
-			if field.Mode == "REQUIRED" {
+			if node.Field.Mode == "REQUIRED" {
 				mode = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(" REQUIRED")
-			} else if field.Mode == "REPEATED" {
+			} else if node.Field.Mode == "REPEATED" {
 				mode = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(" REPEATED")
 			}
 			
-			typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(field.Type)
+			// Build type with color
+			typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(node.Field.Type)
 			
-			line := fmt.Sprintf("├─ %s %s%s", field.Name, typeStyle, mode)
-			content.WriteString(fieldStyle.Render(line))
+			line := fmt.Sprintf("%s%s%s%s %s%s", indent, connector, expandIcon, node.Field.Name, typeStyle, mode)
+			content.WriteString(style.Render(line))
 			content.WriteString("\n")
 		}
 	}
@@ -476,7 +616,7 @@ func (m *browserModel) renderTableDetail() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 1)
 	
-	footer := "⌨️  [b] Back • [q] Quit"
+	footer := "⌨️  [↑↓] Navigate • [Space/→] Expand • [←] Collapse • [b] Back • [q] Quit"
 	content.WriteString(footerStyle.Render(footer))
 	
 	return content.String()
@@ -492,6 +632,123 @@ func (m *browserModel) renderError() string {
 	return errorStyle.Render(fmt.Sprintf("❌ Error: %s\n\nPress [q] to quit", m.err.Error()))
 }
 
+// buildSchemaTree constructs the flattened schema tree for display
+func (m *browserModel) buildSchemaTree() {
+	if m.metadata == nil || m.metadata.Schema == nil {
+		return
+	}
+	
+	m.schemaNodes = []schemaNode{}
+	m.buildSchemaNodesRecursive(m.metadata.Schema.Fields, "", 0)
+	
+	// Reset selection if it's out of bounds
+	if m.selectedSchema >= len(m.schemaNodes) {
+		m.selectedSchema = 0
+	}
+}
+
+// buildSchemaNodesRecursive recursively builds schema nodes with proper expansion state
+func (m *browserModel) buildSchemaNodesRecursive(fields []bigquery.SchemaField, parentPath string, level int) {
+	for _, field := range fields {
+		// Build unique path for this field
+		var path string
+		if parentPath == "" {
+			path = field.Name
+		} else {
+			path = parentPath + "." + field.Name
+		}
+		
+		// Check if this field has nested fields
+		hasChildren := len(field.Fields) > 0
+		
+		// Add this field to the nodes
+		node := schemaNode{
+			Field:       field,
+			Path:        path,
+			Level:       level,
+			HasChildren: hasChildren,
+		}
+		m.schemaNodes = append(m.schemaNodes, node)
+		
+		// If this node is expanded and has children, add them recursively
+		if hasChildren && m.expandedNodes[path] {
+			m.buildSchemaNodesRecursive(field.Fields, path, level+1)
+		}
+	}
+}
+
+// buildPrefetchQueue creates a prioritized queue of tables to prefetch
+func (m *browserModel) buildPrefetchQueue() {
+	m.prefetchQueue = []string{}
+	
+	// Prioritize tables around the current selection
+	start := m.selectedIdx
+	if start > 0 {
+		start--
+	}
+	end := start + 5 // Prefetch 5 tables around selection
+	if end > len(m.tables) {
+		end = len(m.tables)
+	}
+	
+	// Add priority tables first
+	for i := start; i < end; i++ {
+		tableID := m.tables[i].TableID
+		if tableID == "" {
+			tableID = m.tables[i].TableReference.TableID
+		}
+		m.prefetchQueue = append(m.prefetchQueue, tableID)
+	}
+	
+	// Add remaining tables
+	for _, table := range m.tables {
+		tableID := table.TableID
+		if tableID == "" {
+			tableID = table.TableReference.TableID
+		}
+		
+		// Skip if already in queue
+		skip := false
+		for _, queued := range m.prefetchQueue {
+			if queued == tableID {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			m.prefetchQueue = append(m.prefetchQueue, tableID)
+		}
+	}
+}
+
+// startNextPrefetch begins prefetching the next table in queue
+func (m *browserModel) startNextPrefetch() tea.Cmd {
+	// Find next table to prefetch
+	for len(m.prefetchQueue) > 0 {
+		tableID := m.prefetchQueue[0]
+		m.prefetchQueue = m.prefetchQueue[1:]
+		
+		// Skip if already prefetched or in progress
+		if _, exists := m.prefetchedTables[tableID]; exists {
+			continue
+		}
+		if m.prefetchInProgress[tableID] {
+			continue
+		}
+		
+		// Start prefetching this table
+		m.prefetchInProgress[tableID] = true
+		return prefetchTableMetadata(m.client, m.project, m.dataset, tableID)
+	}
+	
+	return nil
+}
+
+// continueNextPrefetch continues the prefetch queue
+func (m *browserModel) continueNextPrefetch() tea.Cmd {
+	return m.startNextPrefetch()
+}
+
 // Messages for async operations
 type tableListLoadedMsg struct {
 	tables []bigquery.TableInfo
@@ -500,6 +757,18 @@ type tableListLoadedMsg struct {
 type tableMetadataLoadedMsg struct {
 	metadata *bigquery.TableMetadata
 }
+
+type tablePrefetchedMsg struct {
+	tableID  string
+	metadata *bigquery.TableMetadata
+}
+
+type prefetchErrorMsg struct {
+	tableID string
+	err     error
+}
+
+type startPrefetchMsg struct{}
 
 type errorMsg struct {
 	err error
@@ -524,4 +793,18 @@ func loadTableMetadata(client *bigquery.Client, project, dataset, table string) 
 		}
 		return tableMetadataLoadedMsg{metadata}
 	})
+}
+
+func prefetchTableMetadata(client *bigquery.Client, project, dataset, table string) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		metadata, err := client.GetTableMetadata(project, dataset, table)
+		if err != nil {
+			return prefetchErrorMsg{tableID: table, err: err}
+		}
+		return tablePrefetchedMsg{tableID: table, metadata: metadata}
+	})
+}
+
+func startPrefetch() tea.Msg {
+	return startPrefetchMsg{}
 }
