@@ -33,16 +33,16 @@ and --format to control output formatting.`,
 func init() {
 	rootCmd.AddCommand(showCmd)
 	
-	// Resource type flags
-	showCmd.Flags().BoolVar(&schemaOnly, "schema", false, "Show only the schema")
-	showCmd.Flags().BoolVar(&viewDetails, "view", false, "Show view-specific details")
-	showCmd.Flags().BoolVar(&materializedView, "materialized-view", false, "Show materialized view details")
+	// Resource type flags with short versions
+	showCmd.Flags().BoolVarP(&schemaOnly, "schema", "s", false, "Show only the schema")
+	showCmd.Flags().BoolVarP(&viewDetails, "view", "v", false, "Show view-specific details including SQL definition")
+	showCmd.Flags().BoolVar(&materializedView, "materialized-view", false, "Show materialized view details including refresh policies")
 	
-	// Output format flags
-	showCmd.Flags().StringVar(&formatFlag, "format", "prettyjson", "Output format: json, prettyjson, pretty, sparse, csv")
+	// Output format flags with short version
+	showCmd.Flags().StringVarP(&formatFlag, "format", "f", "prettyjson", "Output format: json, prettyjson, pretty, sparse, csv")
 	
 	// Override flags
-	showCmd.Flags().StringVar(&projectOverride, "project", "", "Override project ID")
+	showCmd.Flags().StringVarP(&projectOverride, "project", "p", "", "Override project ID for cross-project access")
 	showCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status updates")
 }
 
