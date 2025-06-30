@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(./bqs:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}

@@ -9,9 +9,10 @@ BQS is a Go-based command-line tool that provides a clean interface to BigQuery 
 ## Features
 
 - 🚀 **Fast**: Single binary with no dependencies
-- 🔧 **Simple**: Clean command-line interface
+- 🔧 **Simple**: Clean command-line interface with full `bq show` parity
 - 🌊 **Pipeable**: Supports Unix pipes for data processing
 - 🎯 **Focused**: Designed specifically for BigQuery metadata operations
+- ⚡ **Complete**: Supports tables, views, materialized views, and all output formats
 
 ## Prerequisites
 
@@ -36,29 +37,51 @@ BQS currently supports the `show` command for displaying table and view metadata
 
 ### `bqs show`
 
-Display complete metadata for a BigQuery table or view in JSON format.
+Display metadata for BigQuery tables, views, and materialized views with full `bq show` command parity.
 
 ```bash
-bqs show PROJECT.DATASET.TABLE
+bqs show [flags] PROJECT.DATASET.TABLE
 ```
+
+**Flags:**
+- `--schema` - Show only the schema
+- `--view` - Show view-specific details including SQL definition
+- `--materialized-view` - Show materialized view details
+- `--format` - Output format: `json`, `prettyjson`, `pretty`, `sparse`, `csv` (default: `prettyjson`)
+- `--project` - Override project ID
+- `--quiet` - Suppress status updates
 
 **Examples:**
 
 ```bash
-# Show table metadata
+# Show complete table metadata (default prettyjson format)
 bqs show my-project.analytics.user_events
 
-# Show view metadata
-bqs show my-project.reporting.daily_summary
+# Show only the schema
+bqs show --schema my-project.analytics.user_events
 
-# Pipe output to jq for processing
-bqs show my-project.analytics.user_events | jq '.schema.fields[].name'
+# Show view details including SQL definition
+bqs show --view my-project.reporting.daily_summary
 
-# Save metadata to file
-bqs show my-project.analytics.user_events > table_metadata.json
+# Show materialized view with refresh info
+bqs show --materialized-view my-project.analytics.user_summary_mv
 
-# Extract just the schema
-bqs show my-project.analytics.user_events | jq '.schema'
+# Different output formats
+bqs show --format json my-project.analytics.user_events
+bqs show --format pretty my-project.analytics.user_events
+bqs show --format csv my-project.analytics.user_events
+
+# Override project (useful for cross-project access)
+bqs show --project other-project dataset.table
+
+# Combine flags
+bqs show --schema --format json --quiet my-project.analytics.user_events
+
+# Pipe to jq for processing
+bqs show --format json my-project.analytics.user_events | jq '.schema.fields[].name'
+
+# Save schema to file
+bqs show --schema --format json my-project.analytics.user_events > schema.json
 ```
 
 ## Output Format
@@ -73,17 +96,36 @@ The tool outputs complete BigQuery metadata in JSON format, including:
 
 ## How It Works
 
-BQS parses your `project.dataset.table` input and executes:
+BQS provides a user-friendly wrapper around the `bq show` command with **complete parity**. It parses your input and translates flags to the equivalent `bq` command:
 
 ```bash
-bq show --project_id=PROJECT --format=prettyjson DATASET.TABLE
+# Your command:
+bqs show --schema --format json my-project.dataset.table
+
+# Equivalent bq command:
+bq show --project_id=my-project --schema --format=json dataset.table
 ```
 
-This approach:
-- ✅ Uses existing `bq` authentication
+## `bq show` Command Parity
+
+✅ **Full compatibility** with `bq show` functionality:
+
+| Feature | `bq show` | `bqs show` | Notes |
+|---------|-----------|------------|---------|
+| Tables | ✅ | ✅ | Complete metadata |
+| Views | ✅ | ✅ | Includes SQL definition with `--view` |
+| Materialized Views | ✅ | ✅ | Refresh policies with `--materialized-view` |
+| Schema only | `--schema` | `--schema` | Schema fields only |
+| Output formats | `--format` | `--format` | json, prettyjson, pretty, sparse, csv |
+| Project override | `--project_id` | `--project` | Cross-project access |
+| Quiet mode | `--quiet` | `--quiet` | Suppress status messages |
+
+**Advantages over direct `bq show`:**
+- ✅ Simpler syntax (no need to set project context)
 - ✅ Doesn't modify your `gcloud` configuration
-- ✅ Provides complete metadata in a single command
-- ✅ Supports all BigQuery resources (tables, views, materialized views)
+- ✅ Consistent project.dataset.table format
+- ✅ Enhanced help and documentation
+- ✅ Future extensibility for additional features
 
 ## Development
 
@@ -126,9 +168,21 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-- [ ] Additional output formats (table, yaml)
-- [ ] Schema-only display options
-- [ ] Support for dataset listing
-- [ ] Formatted table output with colors
-- [ ] Configuration file support
+### Completed ✅
+- [x] Full `bq show` command parity
+- [x] All output formats (json, prettyjson, pretty, sparse, csv)
+- [x] Schema-only display (`--schema`)
+- [x] View and materialized view support
+- [x] Project override functionality
+
+### In Progress 🚧
+- [ ] Formatted table output with colors and improved readability
+- [ ] Stdin support for piping table identifiers
+- [ ] Support for dataset listing (`bqs list`)
+
+### Future 🔮
+- [ ] GoReleaser setup for automated releases
 - [ ] Homebrew distribution
+- [ ] Configuration file support
+- [ ] Additional output formats (yaml)
+- [ ] Multi-region location support
