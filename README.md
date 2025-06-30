@@ -1,131 +1,223 @@
 # BQS - BigQuery Schema Tool
 
-A fast, lightweight CLI tool for BigQuery metadata inspection and schema operations.
+A fast, interactive CLI tool for exploring BigQuery datasets and tables with intelligent caching and a beautiful terminal interface.
 
 ## Overview
 
-BQS is a Go-based command-line tool that provides a clean interface to BigQuery table and view metadata. It replaces complex bash scripts with a single binary that's easy to install and use.
+BQS is a Go-based command-line tool that transforms BigQuery exploration from complex bash scripts into an intuitive, interactive experience. It features persistent caching, a terminal-based UI, and multiple exploration modes.
 
 ## Features
 
-- 🚀 **Fast**: Single binary with no dependencies
-- 🔧 **Simple**: Clean command-line interface with full `bq show` parity
-- 🌊 **Pipeable**: Supports Unix pipes for data processing
-- 🎯 **Focused**: Designed specifically for BigQuery metadata operations
-- ⚡ **Complete**: Supports tables, views, materialized views, and all output formats
+### 🚀 Interactive Dataset Browser
+- **Terminal UI**: Navigate datasets with keyboard shortcuts
+- **Real-time Exploration**: Browse tables, view schemas, and explore metadata
+- **Cache Indicators**: Visual markers (✓) show which tables are cached for instant access
+- **Detailed Mode**: Optional flag to fetch complete metadata (size, row counts)
 
-## Prerequisites
+### ⚡ Smart Caching
+- **Persistent Storage**: SQLite-based cache survives between sessions
+- **TTL Management**: Different cache lifetimes for different data types
+- **Automatic Cleanup**: Expired entries are automatically removed
+- **Cache Status**: Always know what's cached vs. fresh from BigQuery
 
-- `bq` command-line tool installed and configured
-- Google Cloud authentication set up (via `gcloud auth` or service account)
+### 🎯 Multiple Commands
+- `browse` - Interactive dataset exploration with TUI
+- `show` - Display table metadata with optional editor integration
+- `schema` - Pretty-print table schemas with nested field support
 
 ## Installation
 
-### Build from Source
-
 ```bash
-git clone https://github.com/yourusername/bqs.git
+# Install with Go
+go install github.com/yourusername/bqs@latest
+
+# Or build from source
+git clone https://github.com/yourusername/bqs
 cd bqs
-go build -o bqs .
+go build -o bqs
 ```
 
-### Usage
+## Quick Start
 
-BQS currently supports the `show` command for displaying table and view metadata.
+### Browse a Dataset Interactively
+```bash
+# Fast browsing (creation times only)
+bqs browse my-project.analytics
+
+# Detailed browsing (includes sizes and row counts)
+bqs browse -d my-project.analytics
+```
+
+### View Table Metadata
+```bash
+# Display metadata in terminal
+bqs show my-project.analytics.events
+
+# Open in your preferred editor
+bqs show --editor code my-project.analytics.events
+```
+
+### Display Table Schema
+```bash
+# Pretty-formatted schema with nested fields
+bqs schema my-project.analytics.events
+```
+
+## Interactive Browser Controls
+
+| Key | Action |
+|-----|--------|
+| `↑↓` or `jk` | Navigate table list |
+| `Enter` | Explore selected table |
+| `Space` or `→` | Expand schema field |
+| `←` or `h` | Collapse schema field |
+| `b` or `Backspace` | Back to table list |
+| `q` or `Ctrl+C` | Quit |
 
 ## Commands
 
-### `bqs show`
+### `bqs browse` - Interactive Dataset Browser
 
-Display metadata for BigQuery tables, views, and materialized views with full `bq show` command parity.
+Explore BigQuery datasets interactively with a terminal-based UI.
+
+```bash
+bqs browse [flags] PROJECT.DATASET
+```
+
+**Flags:**
+- `--detailed, -d` - Fetch detailed metadata (size, row counts) for each table
+
+**Features:**
+- Navigate tables with arrow keys or vim-style controls
+- Visual cache indicators (✓) for fast table access
+- Expandable schema exploration with nested fields
+- Seamless fallback to static mode if terminal UI fails
+
+### `bqs show` - Table Metadata Display
+
+Display complete table metadata with optional editor integration.
 
 ```bash
 bqs show [flags] PROJECT.DATASET.TABLE
 ```
 
 **Flags:**
-- `--schema` - Show only the schema
-- `--view` - Show view-specific details including SQL definition
-- `--materialized-view` - Show materialized view details
-- `--format` - Output format: `json`, `prettyjson`, `pretty`, `sparse`, `csv` (default: `prettyjson`)
+- `--editor` - Open metadata in specified editor (vim, code, zed, etc.)
+- `--format` - Output format options
 - `--project` - Override project ID
-- `--quiet` - Suppress status updates
 
-**Examples:**
+### `bqs schema` - Schema Display
 
-```bash
-# Show complete table metadata (default prettyjson format)
-bqs show my-project.analytics.user_events
-
-# Show only the schema
-bqs show --schema my-project.analytics.user_events
-
-# Show view details including SQL definition
-bqs show --view my-project.reporting.daily_summary
-
-# Show materialized view with refresh info
-bqs show --materialized-view my-project.analytics.user_summary_mv
-
-# Different output formats
-bqs show --format json my-project.analytics.user_events
-bqs show --format pretty my-project.analytics.user_events
-bqs show --format csv my-project.analytics.user_events
-
-# Override project (useful for cross-project access)
-bqs show --project other-project dataset.table
-
-# Combine flags
-bqs show --schema --format json --quiet my-project.analytics.user_events
-
-# Pipe to jq for processing
-bqs show --format json my-project.analytics.user_events | jq '.schema.fields[].name'
-
-# Save schema to file
-bqs show --schema --format json my-project.analytics.user_events > schema.json
-```
-
-## Output Format
-
-The tool outputs complete BigQuery metadata in JSON format, including:
-
-- Table/view schema with field definitions
-- Table properties (creation time, modification time, etc.)
-- Statistics (row count, size, etc.)
-- Partitioning and clustering information
-- View SQL definition (for views)
-
-## How It Works
-
-BQS provides a user-friendly wrapper around the `bq show` command with **complete parity**. It parses your input and translates flags to the equivalent `bq` command:
+Pretty-print table schemas with support for nested and repeated fields.
 
 ```bash
-# Your command:
-bqs show --schema --format json my-project.dataset.table
-
-# Equivalent bq command:
-bq show --project_id=my-project --schema --format=json dataset.table
+bqs schema PROJECT.DATASET.TABLE
 ```
 
-## `bq show` Command Parity
+**Features:**
+- Hierarchical display of nested fields
+- Field type and mode indicators (REQUIRED, REPEATED)
+- Color-coded output for better readability
 
-✅ **Full compatibility** with `bq show` functionality:
+## Caching System
 
-| Feature | `bq show` | `bqs show` | Notes |
-|---------|-----------|------------|---------|
-| Tables | ✅ | ✅ | Complete metadata |
-| Views | ✅ | ✅ | Includes SQL definition with `--view` |
-| Materialized Views | ✅ | ✅ | Refresh policies with `--materialized-view` |
-| Schema only | `--schema` | `--schema` | Schema fields only |
-| Output formats | `--format` | `--format` | json, prettyjson, pretty, sparse, csv |
-| Project override | `--project_id` | `--project` | Cross-project access |
-| Quiet mode | `--quiet` | `--quiet` | Suppress status messages |
+BQS uses intelligent caching to speed up repeated operations:
 
-**Advantages over direct `bq show`:**
-- ✅ Simpler syntax (no need to set project context)
-- ✅ Doesn't modify your `gcloud` configuration
-- ✅ Consistent project.dataset.table format
-- ✅ Enhanced help and documentation
-- ✅ Future extensibility for additional features
+- **Table Lists**: Cached for 5 minutes (datasets don't change often)
+- **Table Metadata**: Cached for 15 minutes (balanced freshness/speed)
+- **Table Schemas**: Cached for 30 minutes (schemas rarely change)
+
+Cache is stored in `~/.cache/bqs/` (follows XDG standards).
+
+### Cache Configuration
+```bash
+# Custom cache directory
+export BQS_CACHE_DIR=/path/to/cache
+
+# Use XDG cache directory
+export XDG_CACHE_HOME=/custom/cache
+```
+
+## Examples
+
+### Exploring a Dataset
+```bash
+$ bqs browse my-project.web_analytics
+
+📊 my-project.web_analytics
+
+Cache  Table           Type   Created
+✓      events          TABLE  Dec 1 10:30
+✓      sessions        TABLE  Dec 1 10:31
+       page_views      VIEW   Dec 2 14:22
+       user_metrics    TABLE  Dec 3 09:15
+
+⌨️  [↑↓] Navigate • [Enter] Explore • [q] Quit • ✓ = Cached
+```
+
+### Viewing Table Details
+```bash
+$ bqs show my-project.web_analytics.events
+
+📊 my-project.web_analytics.events (TABLE)
+📈 1,234,567 rows • 💾 2.3 GB • 🕒 Modified Dec 3 14:30
+
+Opens metadata in your preferred editor or displays in terminal
+```
+
+### Schema-Only View
+```bash
+$ bqs schema my-project.web_analytics.events
+
+🌲 Schema: events
+├─ event_id STRING REQUIRED
+├─ user_id STRING
+├─ timestamp TIMESTAMP REQUIRED
+├─ event_data RECORD
+│  ├─ page_url STRING
+│  ├─ referrer STRING
+│  └─ custom_params RECORD REPEATED
+│     ├─ key STRING
+│     └─ value STRING
+└─ device_info RECORD
+   ├─ browser STRING
+   └─ platform STRING
+```
+
+## Configuration
+
+### Global Flags
+- `--project` - Override the default GCP project
+- `--editor` - Set preferred editor (vim, code, zed, etc.)
+
+### Browse Command
+- `--detailed, -d` - Fetch detailed metadata (size, row counts)
+
+### Environment Variables
+- `BQS_CACHE_DIR` - Custom cache directory
+- `XDG_CACHE_HOME` - XDG-compliant cache directory
+- `GOOGLE_APPLICATION_CREDENTIALS` - Service account key file
+
+## Requirements
+
+- Google Cloud SDK (`gcloud`) installed and authenticated
+- `bq` command-line tool (included with gcloud)
+- Valid BigQuery access permissions
+
+## Authentication
+
+BQS uses your existing Google Cloud authentication:
+
+```bash
+# Login with your user account
+gcloud auth login
+
+# Or use application default credentials
+gcloud auth application-default login
+
+# Or set service account key
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+```
 
 ## Development
 
@@ -135,24 +227,34 @@ bq show --project_id=my-project --schema --format=json dataset.table
 bqs/
 ├── cmd/
 │   ├── root.go     # Root command and CLI setup
-│   └── show.go     # Show command implementation
+│   ├── show.go     # Table metadata display with editor
+│   ├── browse.go   # Interactive dataset browser (TUI)
+│   └── schema.go   # Pretty-print table schema
+├── internal/
+│   ├── bigquery/   # BQ client wrapper (bq CLI integration)
+│   ├── cache/      # SQLite caching with TTL
+│   └── config/     # Configuration management
 ├── main.go         # Application entry point
 ├── go.mod          # Go module definition
+├── CLAUDE.md       # Project memory and documentation
 └── README.md       # This file
 ```
 
 ### Building
-
 ```bash
-# Build binary
-go build -o bqs .
-
-# Run tests
-go test ./...
-
-# Run with go
-go run . show PROJECT.DATASET.TABLE
+go build -o bqs
 ```
+
+### Testing
+```bash
+go test ./...
+```
+
+### Dependencies
+- `github.com/spf13/cobra` - CLI framework
+- `github.com/charmbracelet/bubbletea` - Terminal UI
+- `modernc.org/sqlite` - SQLite driver
+- Native `bq` CLI tool for BigQuery operations
 
 ## Contributing
 
@@ -166,23 +268,8 @@ go run . show PROJECT.DATASET.TABLE
 
 MIT License - see LICENSE file for details.
 
-## Roadmap
+## Acknowledgments
 
-### Completed ✅
-- [x] Full `bq show` command parity
-- [x] All output formats (json, prettyjson, pretty, sparse, csv)
-- [x] Schema-only display (`--schema`)
-- [x] View and materialized view support
-- [x] Project override functionality
-
-### In Progress 🚧
-- [ ] Formatted table output with colors and improved readability
-- [ ] Stdin support for piping table identifiers
-- [ ] Support for dataset listing (`bqs list`)
-
-### Future 🔮
-- [ ] GoReleaser setup for automated releases
-- [ ] Homebrew distribution
-- [ ] Configuration file support
-- [ ] Additional output formats (yaml)
-- [ ] Multi-region location support
+- Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the terminal UI
+- Uses [Cobra](https://github.com/spf13/cobra) for CLI framework
+- Caching powered by SQLite

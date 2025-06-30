@@ -257,9 +257,9 @@ func MetadataKey(project, dataset, table string) string {
 
 // Exists checks if a key exists in the cache (without retrieving the data)
 func (c *Cache) Exists(key string) (bool, error) {
-	query := `SELECT 1 FROM cache WHERE key = ? AND expires_at > ?`
+	query := `SELECT 1 FROM metadata_cache WHERE key = ? AND expires_at > ?`
 	var exists int
-	err := c.db.QueryRow(query, key, time.Now()).Scan(&exists)
+	err := c.db.QueryRow(query, key, time.Now().Unix()).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
