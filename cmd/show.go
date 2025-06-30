@@ -19,13 +19,19 @@ var (
 )
 
 var showCmd = &cobra.Command{
-	Use:   "show <project.dataset.table>",
+	Use:   "show [flags] <project.dataset.table>",
 	Short: "Show BigQuery table or view metadata",
 	Long: `Display metadata for BigQuery tables, views, and materialized views.
 
 Supports all major bq show functionality with enhanced usability.
-Use --schema for schema-only output, --view for view details,
-and --format to control output formatting.`,
+
+Common usage:
+  bqs show project.dataset.table              # Complete metadata (prettyjson)
+  bqs show -s project.dataset.table           # Schema only
+  bqs show -v project.dataset.view            # View with SQL definition
+  bqs show -f json project.dataset.table      # Compact JSON format
+  bqs show -s -f pretty project.dataset.table # Schema in table format
+  bqs show -p other-project dataset.table     # Cross-project access`,
 	Args: cobra.ExactArgs(1),
 	RunE: runShow,
 }
