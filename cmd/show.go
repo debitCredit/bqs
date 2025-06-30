@@ -16,6 +16,7 @@ var (
 	formatFlag       string
 	projectOverride  string
 	quietMode        bool
+	noCache          bool
 )
 
 var showCmd = &cobra.Command{
@@ -50,6 +51,7 @@ func init() {
 	// Override flags
 	showCmd.Flags().StringVarP(&projectOverride, "project", "p", "", "Override project ID for cross-project access")
 	showCmd.Flags().BoolVarP(&quietMode, "quiet", "q", false, "Suppress status updates")
+	showCmd.Flags().BoolVar(&noCache, "no-cache", false, "Bypass cache and fetch fresh data")
 }
 
 func runShow(cmd *cobra.Command, args []string) error {
