@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 
 	"bqs/internal/bigquery"
@@ -22,14 +23,18 @@ Navigate tables and views with keyboard controls, view schemas, and explore
 your BigQuery resources without writing queries.
 
 Examples:
-  bqs browse my-project.analytics        # Browse analytics dataset
-  bqs browse my-project.analytics.table  # Deep dive into specific table`,
+  bqs browse my-project.analytics          # Browse analytics dataset (fast)
+  bqs browse -d my-project.analytics       # Browse with detailed metadata (slower)
+  bqs browse my-project.analytics.table    # Deep dive into specific table`,
 	Args: cobra.ExactArgs(1),
 	RunE: runBrowse,
 }
 
+var detailedMode bool
+
 func init() {
 	rootCmd.AddCommand(browseCmd)
+	browseCmd.Flags().BoolVarP(&detailedMode, "detailed", "d", false, "Fetch detailed metadata (size, rows) for each table - slower but complete")
 }
 
 func runBrowse(cmd *cobra.Command, args []string) error {
@@ -63,21 +68,21 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	
 	if _, err := p.Run(); err != nil {
 		// Fallback to static listing if interactive mode fails
-		return runStaticBrowse(project, dataset, table, bqClient)
+		return runStaticBrowse(project, dataset, table, bqClient, detailedMode)
 	}
 	
 	return nil
 }
 
-func runStaticBrowse(project, dataset, table string, client *bigquery.Client) error {
-	if table != "" {
+func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client, detailed bool) error {
+	if tableName != "" {
 		// Show specific table metadata
-		metadata, err := client.GetTableMetadata(project, dataset, table)
+		metadata, err := client.GetTableMetadata(project, dataset, tableName)
 		if err != nil {
 			return fmt.Errorf("failed to get table metadata: %w", err)
 		}
 		
-		fmt.Printf("📊 %s.%s.%s (%s)\n", project, dataset, table, metadata.Type)
+		fmt.Printf("📊 %s.%s.%s (%s)\n", project, dataset, tableName, metadata.Type)
 		fmt.Printf("📈 %d rows • 💾 %s • 🕒 Modified %s\n\n", 
 			metadata.NumRows, 
 			bigquery.FormatSize(metadata.NumBytes),
@@ -112,33 +117,84 @@ func runStaticBrowse(project, dataset, table string, client *bigquery.Client) er
 		return nil
 	}
 	
-	fmt.Printf("%-40s %-8s %-10s %-15s %s\n", "TABLE", "TYPE", "SIZE", "ROWS", "MODIFIED")
-	fmt.Println(strings.Repeat("─", 80))
+	// Create a nicely formatted table
+	t := table.NewWriter()
+	t.SetStyle(table.StyleRounded)
 	
-	for _, table := range tables {
-		icon := bigquery.GetTableTypeIcon(table.Type)
-		size := bigquery.FormatSize(table.NumBytes)
-		lastMod := bigquery.FormatTime(table.LastModifiedTime)
-		rows := ""
-		if table.NumRows > 0 {
-			rows = fmt.Sprintf("%d", table.NumRows)
-		} else {
-			rows = "N/A"
-		}
+	if detailed {
+		fmt.Println("🔄 Fetching detailed metadata for each table...")
+		t.AppendHeader(table.Row{"", "Table", "Type", "Rows", "Size", "Modified"})
 		
-		tableName := table.TableID
-		if tableName == "" {
-			tableName = table.TableReference.TableID
+		for _, tbl := range tables {
+			tableName := tbl.TableID
+			if tableName == "" {
+				tableName = tbl.TableReference.TableID
+			}
+			
+			icon := bigquery.GetTableTypeIcon(tbl.Type)
+			
+			// Fetch detailed metadata
+			metadata, err := client.GetTableMetadata(project, dataset, tableName)
+			if err != nil {
+				// Fallback to basic info if detailed fetch fails
+				t.AppendRow(table.Row{
+					icon,
+					tableName,
+					tbl.Type,
+					"Error",
+					"Error",
+					bigquery.FormatTime(tbl.CreationTime),
+				})
+				continue
+			}
+			
+			rows := "0"
+			if metadata.NumRows > 0 {
+				rows = fmt.Sprintf("%d", metadata.NumRows)
+			}
+			
+			size := bigquery.FormatSize(metadata.NumBytes)
+			modified := bigquery.FormatTime(metadata.LastModifiedTime)
+			
+			t.AppendRow(table.Row{
+				icon,
+				tableName,
+				tbl.Type,
+				rows,
+				size,
+				modified,
+			})
 		}
-		if tableName == "" {
-			tableName = "unknown"
-		}
+	} else {
+		t.AppendHeader(table.Row{"", "Table", "Type", "Created"})
 		
-		fmt.Printf("%-40s %-8s %-10s %-15s %s\n", 
-			icon+" "+tableName, table.Type, size, rows, lastMod)
+		for _, tbl := range tables {
+			tableName := tbl.TableID
+			if tableName == "" {
+				tableName = tbl.TableReference.TableID
+			}
+			
+			icon := bigquery.GetTableTypeIcon(tbl.Type)
+			created := bigquery.FormatTime(tbl.CreationTime)
+			
+			t.AppendRow(table.Row{
+				icon,
+				tableName,
+				tbl.Type,
+				created,
+			})
+		}
 	}
 	
-	fmt.Printf("\nUse 'bqs browse %s.%s.TABLE_NAME' to explore specific tables\n", project, dataset)
+	fmt.Println(t.Render())
+	
+	if detailed {
+		fmt.Printf("\n💡 Detailed metadata fetched for %d tables\n", len(tables))
+	} else {
+		fmt.Printf("\n💡 Use --detailed flag for size and row count information\n")
+	}
+	
+	fmt.Printf("Use 'bqs browse %s.%s.TABLE_NAME' to explore specific tables\n", project, dataset)
 	
 	return nil
 }
