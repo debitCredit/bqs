@@ -24,15 +24,23 @@ func NewClient(c *cache.Cache) *Client {
 
 // TableInfo represents BigQuery table metadata
 type TableInfo struct {
-	TableID          string    `json:"tableId"`
-	Type             string    `json:"type"` // TABLE, VIEW, MATERIALIZED_VIEW
-	CreationTime     int64     `json:"creationTime,string"`
-	LastModifiedTime int64     `json:"lastModifiedTime,string"`
-	NumRows          int64     `json:"numRows,string,omitempty"`
-	NumBytes         int64     `json:"numBytes,string,omitempty"`
-	Location         string    `json:"location,omitempty"`
-	FriendlyName     string    `json:"friendlyName,omitempty"`
-	Description      string    `json:"description,omitempty"`
+	TableID          string         `json:"tableId"`
+	TableReference   TableReference `json:"tableReference"`
+	Type             string         `json:"type"` // TABLE, VIEW, MATERIALIZED_VIEW
+	CreationTime     int64          `json:"creationTime,string"`
+	LastModifiedTime int64          `json:"lastModifiedTime,string"`
+	NumRows          int64          `json:"numRows,string,omitempty"`
+	NumBytes         int64          `json:"numBytes,string,omitempty"`
+	Location         string         `json:"location,omitempty"`
+	FriendlyName     string         `json:"friendlyName,omitempty"`
+	Description      string         `json:"description,omitempty"`
+}
+
+// TableReference represents BigQuery table reference
+type TableReference struct {
+	ProjectID string `json:"projectId"`
+	DatasetID string `json:"datasetId"`
+	TableID   string `json:"tableId"`
 }
 
 // Schema represents BigQuery table schema
@@ -144,6 +152,13 @@ func (c *Client) fetchTableList(project, dataset string) ([]TableInfo, error) {
 	var tables []TableInfo
 	if err := json.Unmarshal(output, &tables); err != nil {
 		return nil, fmt.Errorf("failed to parse table list: %w", err)
+	}
+
+	// Fix table IDs - use tableReference.tableId if tableId is empty
+	for i := range tables {
+		if tables[i].TableID == "" && tables[i].TableReference.TableID != "" {
+			tables[i].TableID = tables[i].TableReference.TableID
+		}
 	}
 
 	return tables, nil
