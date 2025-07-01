@@ -9,7 +9,9 @@
       "Bash(go test:*)",
       "Bash(go get:*)",
       "Bash(rg:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

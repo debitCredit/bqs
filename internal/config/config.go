@@ -19,6 +19,13 @@ const (
 	TableColumnWidth   = 35
 	TypeColumnWidth    = 8
 	CreatedColumnWidth = 20
+	
+	// UI spacing and timing
+	HeaderFooterPadding = 8  // Account for header, footer, padding in table height
+	StatusMessageTTL    = 3 * time.Second // How long status messages are shown
+	
+	// UI styling constants  
+	ModalBackgroundColor = "237" // Dark background for modals/overlays
 )
 
 // Default cache initialization TTL

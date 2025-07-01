@@ -58,7 +58,13 @@ func (m *browserModel) buildSchemaNodesRecursive(fields []bigquery.SchemaField, 
 func (m *browserModel) renderSchemaTree() string {
 	var content strings.Builder
 
-	for i, node := range m.schemaNodes {
+	// Use filtered nodes if searching, otherwise use all nodes
+	nodesToShow := m.schemaNodes
+	if m.search.FilteredNodes != nil {
+		nodesToShow = m.search.FilteredNodes
+	}
+
+	for i, node := range nodesToShow {
 		selected := i == m.selectedSchema
 
 		var style lipgloss.Style

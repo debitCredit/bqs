@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"bqs/internal/bigquery"
+	"bqs/internal/config"
 )
 
 // Color palette for consistent theming
@@ -91,39 +92,10 @@ func (m *browserModel) renderTableList() string {
 	}
 
 	// Status message with enhanced styling
-	if m.statusMessage != "" {
-		content.WriteString("\n")
-		statusStyle := lipgloss.NewStyle().
-			Foreground(primaryYellow).
-			Bold(true).
-			Padding(0, 1).
-			MarginTop(1).
-			Background(lipgloss.Color("237")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryYellow)
-		content.WriteString(statusStyle.Render(fmt.Sprintf("ℹ️  %s", m.statusMessage)))
-	}
+	content.WriteString(m.renderStatusMessage())
 
-	// Footer with enhanced styling
-	content.WriteString("\n")
-	footerStyle := lipgloss.NewStyle().
-		Foreground(footerGray).
-		Padding(1, 1).
-		MarginTop(1).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(darkGray)
-
-	// Color-coded shortcuts
-	navKeys := lipgloss.NewStyle().Foreground(primaryBlue).Render("[hjkl/↑↓]")
-	actionKeys := lipgloss.NewStyle().Foreground(primaryGreen).Render("[Enter]")
-	copyKeys := lipgloss.NewStyle().Foreground(primaryYellow).Render("[yy]")
-	quitKeys := lipgloss.NewStyle().Foreground(primaryRed).Render("[q]")
-	cachedIcon := lipgloss.NewStyle().Foreground(cachedColor).Render("✓")
-
-	footer := fmt.Sprintf("⌨️  %s Navigate • %s Explore • %s Copy • %s Quit • %s = Cached",
-		navKeys, actionKeys, copyKeys, quitKeys, cachedIcon)
-	content.WriteString(footerStyle.Render(footer))
+	// Footer with integrated search/command bars
+	content.WriteString(m.renderFooter())
 
 	return content.String()
 }
@@ -201,40 +173,10 @@ func (m *browserModel) renderTableDetail() string {
 	}
 
 	// Status message with enhanced styling
-	if m.statusMessage != "" {
-		content.WriteString("\n")
-		statusStyle := lipgloss.NewStyle().
-			Foreground(primaryYellow).
-			Bold(true).
-			Padding(0, 1).
-			MarginTop(1).
-			Background(lipgloss.Color("237")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryYellow)
-		content.WriteString(statusStyle.Render(fmt.Sprintf("ℹ️  %s", m.statusMessage)))
-	}
+	content.WriteString(m.renderStatusMessage())
 
-	// Footer with enhanced styling
-	content.WriteString("\n")
-	footerStyle := lipgloss.NewStyle().
-		Foreground(footerGray).
-		Padding(1, 1).
-		MarginTop(1).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(darkGray)
-
-	// Color-coded shortcuts for table detail
-	navKeys := lipgloss.NewStyle().Foreground(primaryBlue).Render("[hjkl/↑↓]")
-	expandKeys := lipgloss.NewStyle().Foreground(primaryGreen).Render("[Space/→]")
-	collapseKeys := lipgloss.NewStyle().Foreground(accentOrange).Render("[←]")
-	copyKeys := lipgloss.NewStyle().Foreground(primaryYellow).Render("[yy]")
-	backKeys := lipgloss.NewStyle().Foreground(accentCyan).Render("[b]")
-	quitKeys := lipgloss.NewStyle().Foreground(primaryRed).Render("[q]")
-
-	footer := fmt.Sprintf("⌨️  %s Navigate • %s Expand • %s Collapse • %s Copy • %s Back • %s Quit",
-		navKeys, expandKeys, collapseKeys, copyKeys, backKeys, quitKeys)
-	content.WriteString(footerStyle.Render(footer))
+	// Footer with integrated search/command bars
+	content.WriteString(m.renderFooter())
 
 	return content.String()
 }
@@ -247,7 +189,7 @@ func (m *browserModel) renderError() string {
 		Margin(2, 4).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryRed).
-		Background(lipgloss.Color("237"))
+		Background(lipgloss.Color(config.ModalBackgroundColor))
 
 	quitKey := lipgloss.NewStyle().Foreground(primaryYellow).Bold(true).Render("[q]")
 	errorText := fmt.Sprintf("❌ Error: %s\n\nPress %s to quit", m.err.Error(), quitKey)
@@ -322,6 +264,8 @@ func (m *browserModel) renderTableListHelp() string {
 		{"hjkl, ↑↓", "Navigate table list"},
 		{"gg", "Jump to top"},
 		{"G", "Jump to bottom"},
+		{"/", "Search items (Enter to select)"},
+		{":", "Command mode (:copy, :quit)"},
 		{"Enter", "Explore selected table"},
 		{"yy", "Copy table identifier"},
 	}
@@ -351,6 +295,8 @@ func (m *browserModel) renderTableDetailHelp() string {
 		{"hjkl, ↑↓", "Navigate schema fields"},
 		{"gg", "Jump to top"},
 		{"G", "Jump to bottom"},
+		{"/", "Search schema fields (Enter to select)"},
+		{":", "Command mode (:copy, :quit)"},
 		{"Space, →", "Expand field"},
 		{"←, h", "Collapse field"},
 		{"yy", "Copy table identifier"},
@@ -386,4 +332,143 @@ func (m *browserModel) renderUniversalHelp() string {
 	}
 
 	return content.String()
+}
+
+
+// renderStatusMessage renders the status message if present
+func (m *browserModel) renderStatusMessage() string {
+	if m.statusMessage == "" {
+		return ""
+	}
+
+	statusStyle := lipgloss.NewStyle().
+		Foreground(primaryYellow).
+		Bold(true).
+		Padding(0, 1).
+		MarginTop(1).
+		Background(lipgloss.Color(config.ModalBackgroundColor)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryYellow)
+	
+	return "\n" + statusStyle.Render(fmt.Sprintf("ℹ️  %s", m.statusMessage))
+}
+
+// renderFooter renders the footer with integrated search/command bars or normal shortcuts
+func (m *browserModel) renderFooter() string {
+	var content strings.Builder
+	
+	content.WriteString("\n")
+	
+	// Base footer style
+	footerStyle := lipgloss.NewStyle().
+		Foreground(footerGray).
+		Padding(1, 1).
+		MarginTop(1).
+		BorderTop(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(darkGray)
+	
+	// If search is active, show search bar in footer
+	if m.search.Active {
+		searchContent := m.renderSearchBarInFooter()
+		content.WriteString(footerStyle.Render(searchContent))
+		return content.String()
+	}
+	
+	// If command mode is active, show command bar in footer
+	if m.commandMode {
+		commandContent := m.renderCommandBarInFooter()
+		content.WriteString(footerStyle.Render(commandContent))
+		return content.String()
+	}
+	
+	// Normal footer with shortcuts
+	if m.state == stateTableList {
+		content.WriteString(m.renderTableListFooter(footerStyle))
+	} else if m.state == stateTableDetail {
+		content.WriteString(m.renderTableDetailFooter(footerStyle))
+	}
+	
+	return content.String()
+}
+
+// renderSearchBarInFooter renders the search bar integrated into the footer
+func (m *browserModel) renderSearchBarInFooter() string {
+	// Show different prompts based on search state and current view
+	var searchText string
+	if m.search.Query == "" {
+		if m.state == stateTableList {
+			searchText = "🔍 Search tables/views (Esc to cancel): _"
+		} else {
+			searchText = "🔍 Search schema fields (Esc to cancel): _"
+		}
+	} else {
+		var resultsCount int
+		var searchType string
+		
+		if m.state == stateTableList {
+			resultsCount = len(m.tables)
+			if m.search.FilteredTables != nil {
+				resultsCount = len(m.search.FilteredTables)
+			}
+			searchType = "tables"
+		} else {
+			resultsCount = len(m.schemaNodes)
+			if m.search.FilteredNodes != nil {
+				resultsCount = len(m.search.FilteredNodes)
+			}
+			searchType = "fields"
+		}
+		
+		searchText = fmt.Sprintf("🔍 Search: %s_ (%d %s, Enter to select, Esc to cancel)", m.search.Query, resultsCount, searchType)
+	}
+	
+	return searchText
+}
+
+// renderCommandBarInFooter renders the command bar integrated into the footer
+func (m *browserModel) renderCommandBarInFooter() string {
+	commandText := fmt.Sprintf("⚡ Command: :%s_ (Esc to cancel)", m.commandQuery)
+	
+	// Show available commands if command query is empty
+	if m.commandQuery == "" {
+		commandText += " • Available: copy, quit, help"
+	}
+	
+	return commandText
+}
+
+// renderTableListFooter renders the normal table list footer with shortcuts
+func (m *browserModel) renderTableListFooter(footerStyle lipgloss.Style) string {
+	// Color-coded shortcuts
+	navKeys := lipgloss.NewStyle().Foreground(primaryBlue).Render("[hjkl/↑↓]")
+	actionKeys := lipgloss.NewStyle().Foreground(primaryGreen).Render("[Enter]")
+	copyKeys := lipgloss.NewStyle().Foreground(primaryYellow).Render("[yy]")
+	searchKeys := lipgloss.NewStyle().Foreground(accentCyan).Render("[/]")
+	commandKeys := lipgloss.NewStyle().Foreground(accentPurple).Render("[:]")
+	quitKeys := lipgloss.NewStyle().Foreground(primaryRed).Render("[q]")
+	cachedIcon := lipgloss.NewStyle().Foreground(cachedColor).Render("✓")
+
+	footer := fmt.Sprintf("⌨️  %s Navigate • %s Explore • %s Copy • %s Search • %s Command • %s Quit • %s = Cached",
+		navKeys, actionKeys, copyKeys, searchKeys, commandKeys, quitKeys, cachedIcon)
+	
+	return footerStyle.Render(footer)
+}
+
+// renderTableDetailFooter renders the normal table detail footer with shortcuts
+func (m *browserModel) renderTableDetailFooter(footerStyle lipgloss.Style) string {
+	// Color-coded shortcuts for table detail
+	navKeys := lipgloss.NewStyle().Foreground(primaryBlue).Render("[hjkl/↑↓]")
+	expandKeys := lipgloss.NewStyle().Foreground(primaryGreen).Render("[Space/→]")
+	collapseKeys := lipgloss.NewStyle().Foreground(accentOrange).Render("[←]")
+	searchKeys := lipgloss.NewStyle().Foreground(accentCyan).Render("[/]")
+	commandKeys := lipgloss.NewStyle().Foreground(accentPurple).Render("[:]")
+	copyKeys := lipgloss.NewStyle().Foreground(primaryYellow).Render("[yy]")
+	backKeys := lipgloss.NewStyle().Foreground(secondaryGray).Render("[b]")
+	quitKeys := lipgloss.NewStyle().Foreground(primaryRed).Render("[q]")
+
+	footer := fmt.Sprintf("⌨️  %s Navigate • %s Expand • %s Collapse • %s Search • %s Command • %s Copy • %s Back • %s Quit",
+		navKeys, expandKeys, collapseKeys, searchKeys, commandKeys, copyKeys, backKeys, quitKeys)
+	
+	return footerStyle.Render(footer)
 }

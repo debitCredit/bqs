@@ -18,6 +18,8 @@ const (
 	stateTableDetail
 	stateError
 	stateHelp
+	stateSearch
+	stateCommand
 )
 
 // browserModel is the main Bubble Tea model
@@ -40,6 +42,9 @@ type browserModel struct {
 	selectedSchema int
 	expandedNodes  map[string]bool
 
+	// Search state
+	search SearchState
+
 	// Cache state (lazy loading)
 	cachedMetadata map[string]*bigquery.TableMetadata
 
@@ -58,6 +63,10 @@ type browserModel struct {
 	
 	// Help state
 	previousState browserState // Store previous state when showing help
+	
+	// Command mode state
+	commandMode  bool
+	commandQuery string
 }
 
 // schemaNode represents a node in the schema tree
@@ -66,6 +75,51 @@ type schemaNode struct {
 	Path        string // Unique path for tracking expansion state
 	Level       int    // Nesting level for indentation
 	HasChildren bool
+}
+
+// SearchContext represents what type of content is being searched
+type SearchContext int
+
+const (
+	SearchTables SearchContext = iota
+	SearchSchema
+)
+
+// SearchState encapsulates all search-related state and behavior
+type SearchState struct {
+	Active         bool
+	Query          string
+	Context        SearchContext
+	SelectedIndex  int
+	FilteredTables []bigquery.TableInfo
+	FilteredNodes  []schemaNode
+}
+
+// Clear resets the search state
+func (s *SearchState) Clear() {
+	s.Active = false
+	s.Query = ""
+	s.SelectedIndex = 0
+	s.FilteredTables = nil
+	s.FilteredNodes = nil
+}
+
+// IsEmpty returns true if no search is active
+func (s *SearchState) IsEmpty() bool {
+	return !s.Active || s.Query == ""
+}
+
+// ResultCount returns the number of filtered results
+func (s *SearchState) ResultCount() int {
+	if s.Context == SearchTables {
+		return len(s.FilteredTables)
+	}
+	return len(s.FilteredNodes)
+}
+
+// HasResults returns true if there are filtered results
+func (s *SearchState) HasResults() bool {
+	return s.ResultCount() > 0
 }
 
 // Messages for async operations

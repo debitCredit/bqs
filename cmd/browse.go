@@ -225,7 +225,7 @@ func (m *browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		// Update table model height based on available space
 		if m.state == stateTableList {
-			tableHeight := m.height - 8 // Account for header, footer, padding
+			tableHeight := m.height - config.HeaderFooterPadding
 			if tableHeight < config.MinTableHeight {
 				tableHeight = config.MinTableHeight
 			}
@@ -296,6 +296,16 @@ func (m *browserModel) View() string {
 func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	
+	// Handle search mode FIRST - this takes priority
+	if m.search.Active {
+		return m.handleSearchInput(msg)
+	}
+	
+	// Handle command mode
+	if m.commandMode {
+		return m.handleCommandInput(msg)
+	}
+	
 	// Handle help mode separately
 	if m.state == stateHelp {
 		switch key {
@@ -328,6 +338,29 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.lastKey = ""
 		return m, nil
 
+	case "/":
+		// Enter search mode (for table list and table detail)
+		if (m.state == stateTableList || m.state == stateTableDetail) && !m.search.Active {
+			m.search.Active = true
+			m.search.Query = ""
+			if m.state == stateTableList {
+				m.search.Context = SearchTables
+			} else {
+				m.search.Context = SearchSchema
+			}
+			m.lastKey = ""
+			return m, nil
+		}
+
+	case ":":
+		// Enter command mode
+		if !m.commandMode && !m.search.Active {
+			m.commandMode = true
+			m.commandQuery = ""
+			m.lastKey = ""
+			return m, nil
+		}
+
 	case "escape":
 		if m.state == stateHelp {
 			// Hide help overlay
@@ -335,16 +368,11 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.lastKey = ""
 			return m, nil
 		}
+		// Note: search and command mode escapes are handled in their respective input handlers
 
 	case "g":
 		if m.lastKey == "g" { // gg sequence - jump to top
-			if m.state == stateTableList {
-				// Jump to top of table list
-				m.tableModel.GotoTop()
-			} else if m.state == stateTableDetail {
-				// Jump to top of schema
-				m.selectedSchema = 0
-			}
+			m.handleNavigation("top")
 			m.lastKey = ""
 			return m, nil
 		}
@@ -352,14 +380,7 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "G":
-		// Jump to bottom
-		if m.state == stateTableList {
-			// Jump to bottom of table list
-			m.tableModel.GotoBottom()
-		} else if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
-			// Jump to bottom of schema
-			m.selectedSchema = len(m.schemaNodes) - 1
-		}
+		m.handleNavigation("bottom")
 		m.lastKey = ""
 
 	case "y":
@@ -372,19 +393,11 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
-		// For table list, navigation is handled by the table model
-		// For table detail, handle schema navigation
-		if m.state == stateTableDetail && m.selectedSchema > 0 {
-			m.selectedSchema--
-		}
+		m.handleNavigation("up")
 		m.lastKey = ""
 
 	case "down", "j":
-		// For table list, navigation is handled by the table model
-		// For table detail, handle schema navigation
-		if m.state == stateTableDetail && m.selectedSchema < len(m.schemaNodes)-1 {
-			m.selectedSchema++
-		}
+		m.handleNavigation("down")
 		m.lastKey = ""
 
 	case "enter":
@@ -392,14 +405,24 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateTableList && len(m.tables) > 0 {
 			// Get selected table from the table model cursor
 			selectedIdx := m.tableModel.Cursor()
-			if selectedIdx >= 0 && selectedIdx < len(m.tables) {
-				table := m.tables[selectedIdx]
+			
+			// Use filtered tables if searching, otherwise use all tables
+			tablesToShow := m.tables
+			if m.search.FilteredTables != nil {
+				tablesToShow = m.search.FilteredTables
+			}
+			
+			if selectedIdx >= 0 && selectedIdx < len(tablesToShow) {
+				table := tablesToShow[selectedIdx]
 				tableID := table.TableID
 				if tableID == "" {
 					tableID = table.TableReference.TableID
 				}
 
 				m.table = tableID
+				
+				// Clear search state when navigating to table detail
+				m.clearSearchState()
 
 				// Check if we have real cached metadata (not just a placeholder)
 				if cached, exists := m.cachedMetadata[tableID]; exists && cached != nil && cached.Schema != nil {
@@ -451,6 +474,9 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "b", "backspace":
 		m.lastKey = ""
 		if m.state == stateTableDetail {
+			// Clear search state when navigating back to table list
+			m.clearSearchState()
+			
 			// Check if we have table list data
 			if len(m.tables) == 0 {
 				// Need to load table list first
@@ -488,13 +514,19 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateTableRows populates the Bubbletea table component with current table data
 func (m *browserModel) updateTableRows() {
-	if len(m.tables) == 0 {
+	// Use filtered tables if searching, otherwise use all tables
+	tablesToShow := m.tables
+	if m.search.FilteredTables != nil {
+		tablesToShow = m.search.FilteredTables
+	}
+	
+	if len(tablesToShow) == 0 {
 		m.tableModel.SetRows([]table.Row{})
 		return
 	}
 
-	rows := make([]table.Row, len(m.tables))
-	for i, tbl := range m.tables {
+	rows := make([]table.Row, len(tablesToShow))
+	for i, tbl := range tablesToShow {
 		tableID := tbl.TableID
 		if tableID == "" {
 			tableID = tbl.TableReference.TableID
@@ -583,6 +615,249 @@ func (m *browserModel) copyCurrentTable() {
 // setStatusMessage sets a temporary status message with timeout
 func (m *browserModel) setStatusMessage(message string) {
 	m.statusMessage = message
-	m.statusTimeout = time.Now().Add(3 * time.Second)
+	m.statusTimeout = time.Now().Add(config.StatusMessageTTL)
+}
+
+// clearSearchState resets all search-related state
+func (m *browserModel) clearSearchState() {
+	m.search.Clear()
+}
+
+// selectCurrentSearchResult selects the currently highlighted item from search results
+// and maps it back to the full list for proper highlighting
+func (m *browserModel) selectCurrentSearchResult() {
+	if m.state == stateTableList && m.search.FilteredTables != nil && len(m.search.FilteredTables) > 0 {
+		// Get the currently selected item from filtered results
+		selectedIdx := m.tableModel.Cursor()
+		if selectedIdx >= 0 && selectedIdx < len(m.search.FilteredTables) {
+			selectedTable := m.search.FilteredTables[selectedIdx]
+			
+			// Find this table in the full list and set cursor there
+			for i, table := range m.tables {
+				tableID := table.TableID
+				if tableID == "" {
+					tableID = table.TableReference.TableID
+				}
+				selectedTableID := selectedTable.TableID
+				if selectedTableID == "" {
+					selectedTableID = selectedTable.TableReference.TableID
+				}
+				
+				if tableID == selectedTableID {
+					m.tableModel.SetCursor(i)
+					break
+				}
+			}
+		}
+	} else if m.state == stateTableDetail && m.search.FilteredNodes != nil && len(m.search.FilteredNodes) > 0 {
+		// Get the currently selected field from filtered results
+		if m.selectedSchema >= 0 && m.selectedSchema < len(m.search.FilteredNodes) {
+			selectedNode := m.search.FilteredNodes[m.selectedSchema]
+			
+			// Find this field in the full schema and set selection there
+			for i, node := range m.schemaNodes {
+				if node.Path == selectedNode.Path {
+					m.selectedSchema = i
+					break
+				}
+			}
+		}
+	}
+}
+
+// handleSearchInput handles keyboard input in search mode
+func (m *browserModel) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	
+	// Check for escape using multiple methods (robust escape detection)
+	if key == "escape" || key == "esc" || msg.Type == tea.KeyEscape {
+		// Exit search mode and clear all search state
+		m.clearSearchState()
+		m.updateTableRows()
+		return m, nil
+	}
+	
+	switch key {
+	case "enter":
+		// fzf-style: select current item and return to full view with selection
+		m.selectCurrentSearchResult()
+		m.clearSearchState()
+		m.updateTableRows()
+		return m, nil
+		
+	case "ctrl+c", "ctrl+g":
+		// Exit search mode and clear all search state
+		m.clearSearchState()
+		m.updateTableRows()
+		return m, nil
+		
+	case "backspace":
+		if len(m.search.Query) > 0 {
+			m.search.Query = m.search.Query[:len(m.search.Query)-1]
+			m.filterTables()
+			m.updateTableRows()
+		}
+		return m, nil
+		
+	case "up":
+		m.handleNavigation("up")
+		return m, nil
+	case "down":
+		m.handleNavigation("down")
+		return m, nil
+		
+	default:
+		// Add character to search query
+		if len(key) == 1 { // Only single printable characters (including space)
+			m.search.Query += key
+			m.filterTables()
+			m.updateTableRows()
+		}
+		return m, nil
+	}
+}
+
+// handleNavigation handles all navigation in a unified way
+func (m *browserModel) handleNavigation(direction string) {
+	switch direction {
+	case "up":
+		if m.state == stateTableDetail && m.selectedSchema > 0 {
+			m.selectedSchema--
+		}
+		// For table list, navigation is handled by the table model automatically
+		
+	case "down":
+		if m.state == stateTableDetail {
+			// Use filtered nodes count if searching, otherwise use all nodes
+			maxNodes := len(m.schemaNodes)
+			if m.search.FilteredNodes != nil {
+				maxNodes = len(m.search.FilteredNodes)
+			}
+			if m.selectedSchema < maxNodes-1 {
+				m.selectedSchema++
+			}
+		}
+		// For table list, navigation is handled by the table model automatically
+		
+	case "top":
+		if m.state == stateTableList {
+			m.tableModel.GotoTop()
+		} else if m.state == stateTableDetail {
+			m.selectedSchema = 0
+		}
+		
+	case "bottom":
+		if m.state == stateTableList {
+			m.tableModel.GotoBottom()
+		} else if m.state == stateTableDetail {
+			maxNodes := len(m.schemaNodes)
+			if m.search.FilteredNodes != nil {
+				maxNodes = len(m.search.FilteredNodes)
+			}
+			if maxNodes > 0 {
+				m.selectedSchema = maxNodes - 1
+			}
+		}
+	}
+}
+
+// filterTables filters the table list based on the search query
+func (m *browserModel) filterTables() {
+	if m.search.Query == "" {
+		m.search.FilteredTables = nil
+		m.search.FilteredNodes = nil
+		return
+	}
+	
+	query := strings.ToLower(m.search.Query)
+	
+	// Filter tables if in table list view
+	if m.search.Context == SearchTables && len(m.tables) > 0 {
+		m.search.FilteredTables = make([]bigquery.TableInfo, 0)
+		for _, table := range m.tables {
+			tableID := table.TableID
+			if tableID == "" {
+				tableID = table.TableReference.TableID
+			}
+			
+			// Simple substring search (case-insensitive)
+			if strings.Contains(strings.ToLower(tableID), query) {
+				m.search.FilteredTables = append(m.search.FilteredTables, table)
+			}
+		}
+	}
+	
+	// Filter schema nodes if in table detail view
+	if m.search.Context == SearchSchema && len(m.schemaNodes) > 0 {
+		m.search.FilteredNodes = make([]schemaNode, 0)
+		for _, node := range m.schemaNodes {
+			// Search in field name and field type
+			fieldName := strings.ToLower(node.Field.Name)
+			fieldType := strings.ToLower(node.Field.Type)
+			
+			if strings.Contains(fieldName, query) || strings.Contains(fieldType, query) {
+				m.search.FilteredNodes = append(m.search.FilteredNodes, node)
+			}
+		}
+	}
+}
+
+// handleCommandInput handles keyboard input in command mode
+func (m *browserModel) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	
+	// Check for escape using multiple methods (robust escape detection)
+	if key == "escape" || key == "esc" || msg.Type == tea.KeyEscape {
+		// Cancel command mode and clear command query
+		m.commandMode = false
+		m.commandQuery = ""
+		return m, nil
+	}
+	
+	switch key {
+	case "enter":
+		// Execute command
+		m.commandMode = false
+		m.executeCommand(m.commandQuery)
+		m.commandQuery = ""
+		return m, nil
+		
+	case "ctrl+c", "ctrl+g":
+		// Cancel command
+		m.commandMode = false
+		m.commandQuery = ""
+		return m, nil
+		
+	case "backspace":
+		if len(m.commandQuery) > 0 {
+			m.commandQuery = m.commandQuery[:len(m.commandQuery)-1]
+		}
+		return m, nil
+		
+	default:
+		// Add character to command query
+		if len(key) == 1 { // Only single printable characters
+			m.commandQuery += key
+		}
+		return m, nil
+	}
+}
+
+// executeCommand executes the entered command
+func (m *browserModel) executeCommand(command string) {
+	switch command {
+	case "q", "quit":
+		// Note: This won't work in the model, we'd need to return tea.Quit
+		m.setStatusMessage("Use 'q' key to quit")
+	case "copy":
+		m.copyCurrentTable()
+	case "help", "h":
+		m.setStatusMessage("Available commands: copy, quit, help")
+	case "":
+		// Empty command, do nothing
+		return
+	default:
+		m.setStatusMessage(fmt.Sprintf("Unknown command: '%s'. Available: copy, quit, help", command))
+	}
 }
 

@@ -9,10 +9,18 @@ BQS is a Go-based command-line tool that transforms BigQuery exploration from co
 ## Features
 
 ### 🚀 Interactive Dataset Browser
-- **Terminal UI**: Navigate datasets with keyboard shortcuts
+- **Terminal UI**: Navigate datasets with keyboard shortcuts (hjkl, arrows, vim-style)
 - **Fast & Scalable**: Browse thousands of tables instantly with basic info
 - **Rich Detail Views**: Get complete metadata when exploring specific tables
+- **Schema Tree Navigation**: Expandable nested field exploration with visual indicators
 - **Cache Indicators**: Visual markers (✓) show which tables are cached for instant access
+
+### 🔍 Fuzzy Search (fzf-style)
+- **Real-time Filtering**: Search tables/views and schema fields as you type
+- **Navigation in Results**: Use hjkl/arrows to navigate filtered results
+- **Smart Selection**: Enter to select item, return to full view with highlight
+- **Context Awareness**: Different search modes for tables vs. schema fields
+- **Instant Clear**: Escape to cancel search and return to full view
 
 ### ⚡ Smart Caching
 - **Persistent Storage**: SQLite-based cache survives between sessions
@@ -20,8 +28,14 @@ BQS is a Go-based command-line tool that transforms BigQuery exploration from co
 - **Automatic Cleanup**: Expired entries are automatically removed
 - **Cache Status**: Always know what's cached vs. fresh from BigQuery
 
+### 🎛️ Vim-Style Command Mode
+- **Colon Commands**: Press `:` to enter command mode with discoverable commands
+- **Available Commands**: `:copy` (copy table ID), `:quit` (exit), `:help` (show commands)
+- **Visual Feedback**: Command bar shows available options and current input
+- **Consistent UX**: Works in both table list and schema detail views
+
 ### 🎯 Multiple Commands
-- `browse` - Interactive dataset exploration with TUI
+- `browse` - Interactive dataset exploration with TUI, search, and command mode
 - `show` - Display table metadata with optional editor integration
 - `schema` - Pretty-print table schemas with nested field support
 
@@ -46,6 +60,9 @@ bqs browse my-project.analytics
 
 # Explore specific table with complete metadata
 bqs browse my-project.analytics.events
+
+# Use vim-style navigation (hjkl), search (/), and commands (:)
+# Press ? for help, / to search, : for commands
 ```
 
 ### View Table Metadata
@@ -174,7 +191,7 @@ Cache  Table           Type   Created
        page_views      VIEW   Dec 2 14:22
        user_metrics    TABLE  Dec 3 09:15
 
-⌨️ hjkl/↑↓ Navigate • Enter Explore • / Search • ? Help • yy Copy • q Quit
+⌨️ hjkl/↑↓ Navigate • Enter Explore • / Search • : Command • yy Copy • ? Help • q Quit
 ```
 
 ### Viewing Table Details
@@ -185,6 +202,31 @@ $ bqs show my-project.web_analytics.events
 📈 1,234,567 rows • 💾 2.3 GB • 🕒 Modified Dec 3 14:30
 
 Opens metadata in your preferred editor or displays in terminal
+```
+
+### Fuzzy Search in Action
+```bash
+# Press "/" in browse mode to start searching
+🔍 Search items (Esc/Ctrl+C to cancel): user_
+
+📊 my-project.web_analytics
+Cache  Table           Type   Created
+✓      user_events     TABLE  Dec 1 10:30
+       user_profiles   TABLE  Dec 1 11:45
+       user_metrics    TABLE  Dec 3 09:15
+
+🔍 Search: user_ (3 items, Enter to select)
+⌨️ hjkl/↑↓ Navigate filtered results • Enter Select • Esc Cancel
+```
+
+### Command Mode
+```bash
+# Press ":" to enter command mode
+⚡ Command: :_ (Esc to cancel)
+Available: copy (copy table ID), quit (exit app), help (show commands)
+
+# Type "copy" and press Enter to copy current table identifier
+⚡ Command: :copy_
 ```
 
 ### Schema-Only View
