@@ -65,32 +65,55 @@ bqs schema my-project.analytics.events
 
 ## Interactive Browser Controls
 
+### Navigation
 | Key | Action |
 |-----|--------|
 | `↑↓` or `jk` | Navigate table list |
+| `hjkl` | Vim-style navigation |
+| `gg` | Jump to top of list |
+| `G` | Jump to bottom of list |
 | `Enter` | Explore selected table |
+| `Tab` | Switch between panels |
+
+### Schema Exploration
+| Key | Action |
+|-----|--------|
 | `Space` or `→` | Expand schema field |
 | `←` or `h` | Collapse schema field |
 | `b` or `Backspace` | Back to table list |
+
+### Search & Help
+| Key | Action |
+|-----|--------|
+| `/` | Search/filter current view |
+| `?` | Context-sensitive help |
+| `yy` | Copy table identifier |
 | `q` or `Ctrl+C` | Quit |
+
+### Visual Indicators
+- `✓` - Cached table (instant access)
+- `⏳` - Loading in progress  
+- Color coding for table types and states
 
 ## Commands
 
 ### `bqs browse` - Interactive Dataset Browser
 
-Explore BigQuery datasets interactively with a terminal-based UI.
+Explore BigQuery datasets interactively with a terminal-based UI featuring vim-inspired navigation.
 
 ```bash
 bqs browse [flags] PROJECT.DATASET
 ```
 
 **Features:**
-- Navigate tables with arrow keys or vim-style controls  
-- Visual cache indicators (✓) for fast table access
-- Fast browsing of thousands of tables with basic info
-- Rich metadata views when exploring specific tables
-- Expandable schema exploration with nested fields
-- Seamless fallback to static mode if terminal UI fails
+- **Vim-style Navigation**: hjkl movement, gg/G for top/bottom, / for search
+- **Visual Cache Indicators**: ✓ for cached tables with instant access
+- **Smart Search**: Filter current view with real-time results
+- **Context-Sensitive Help**: ? shows relevant shortcuts for current view
+- **Progressive Disclosure**: Rich metadata when exploring specific tables
+- **Expandable Schema Trees**: Navigate nested fields with visual indicators
+- **Workflow Integration**: Copy table identifiers, open in external tools
+- **Performance Optimized**: Fast browsing of thousands of tables with lazy loading
 
 ### `bqs show` - Table Metadata Display
 
@@ -151,7 +174,7 @@ Cache  Table           Type   Created
        page_views      VIEW   Dec 2 14:22
        user_metrics    TABLE  Dec 3 09:15
 
-⌨️  [↑↓] Navigate • [Enter] Explore • [q] Quit • ✓ = Cached
+⌨️ hjkl/↑↓ Navigate • Enter Explore • / Search • ? Help • yy Copy • q Quit
 ```
 
 ### Viewing Table Details
@@ -279,6 +302,12 @@ go test ./...
 - **Mock Implementations**: Full mock cache service for isolated testing
 - **Integration Tests**: End-to-end validation of BigQuery client operations
 - **Error Handling**: Graceful degradation and consistent error messages
+
+**UX Design Philosophy:**
+- **Vim-Inspired Navigation**: Familiar keyboard shortcuts for power users
+- **Progressive Disclosure**: Context-sensitive help and discoverable features
+- **Constraint-Driven Design**: Works with BigQuery API limitations, not against them
+- **Anti-Bloat Principles**: Maximum UX impact with minimal code complexity
 
 ### Dependencies
 - `github.com/spf13/cobra` - CLI framework and command structure
