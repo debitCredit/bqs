@@ -2,11 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"bqs/internal/cache"
+	"bqs/internal/utils"
 )
 
 var cacheCmd = &cobra.Command{
@@ -47,7 +46,7 @@ func init() {
 }
 
 func runCacheStats(cmd *cobra.Command, args []string) error {
-	c, err := cache.New(15 * time.Minute)
+	c, err := utils.NewCache()
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -62,7 +61,7 @@ func runCacheStats(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Total entries:   %d\n", stats.TotalEntries)
 	fmt.Printf("  Valid entries:   %d\n", stats.ValidEntries)
 	fmt.Printf("  Expired entries: %d\n", stats.ExpiredEntries)
-	fmt.Printf("  Database size:   %s\n", formatBytes(stats.SizeBytes))
+	fmt.Printf("  Database size:   %s\n", utils.FormatBytes(stats.SizeBytes))
 
 	if stats.TotalEntries > 0 {
 		fmt.Printf("  Hit rate:        %.1f%%\n", float64(stats.ValidEntries)/float64(stats.TotalEntries)*100)
@@ -72,7 +71,7 @@ func runCacheStats(cmd *cobra.Command, args []string) error {
 }
 
 func runCacheClear(cmd *cobra.Command, args []string) error {
-	c, err := cache.New(15 * time.Minute)
+	c, err := utils.NewCache()
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -97,7 +96,7 @@ func runCacheClear(cmd *cobra.Command, args []string) error {
 }
 
 func runCacheCleanup(cmd *cobra.Command, args []string) error {
-	c, err := cache.New(15 * time.Minute)
+	c, err := utils.NewCache()
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -120,7 +119,7 @@ func runCacheCleanup(cmd *cobra.Command, args []string) error {
 	removed := statsBefore.ExpiredEntries
 	if removed > 0 {
 		fmt.Printf("Removed %d expired cache entries\n", removed)
-		fmt.Printf("Cache size reduced by %s\n", formatBytes(statsBefore.SizeBytes-statsAfter.SizeBytes))
+		fmt.Printf("Cache size reduced by %s\n", utils.FormatBytes(statsBefore.SizeBytes-statsAfter.SizeBytes))
 	} else {
 		fmt.Println("No expired entries to clean up")
 	}
@@ -128,15 +127,3 @@ func runCacheCleanup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}

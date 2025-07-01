@@ -8,15 +8,17 @@ import (
 	"time"
 
 	"bqs/internal/cache"
+	"bqs/internal/config"
+	"bqs/internal/utils"
 )
 
 // Client wraps BigQuery operations with caching
 type Client struct {
-	cache *cache.Cache
+	cache cache.Service
 }
 
 // NewClient creates a new BigQuery client with caching
-func NewClient(c *cache.Cache) *Client {
+func NewClient(c cache.Service) *Client {
 	return &Client{
 		cache: c,
 	}
@@ -92,9 +94,17 @@ func (c *Client) ListTables(project, dataset string) ([]TableInfo, error) {
 	}
 
 	// Cache the result
-	data, _ := json.Marshal(tables)
-	ttl := 5 * time.Minute // Tables list changes infrequently
-	c.cache.Set(cacheKey, string(data), &ttl)
+	data, err := json.Marshal(tables)
+	if err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to marshal table list for caching: %v\n", err)
+		return tables, nil
+	}
+	ttl := config.TableListTTL
+	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to cache table list: %v\n", err)
+	}
 
 	return tables, nil
 }
@@ -118,9 +128,17 @@ func (c *Client) GetSchema(project, dataset, table string) (*Schema, error) {
 	}
 
 	// Cache the result
-	data, _ := json.Marshal(schema)
-	ttl := 30 * time.Minute // Schemas change rarely
-	c.cache.Set(cacheKey, string(data), &ttl)
+	data, err := json.Marshal(schema)
+	if err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to marshal schema for caching: %v\n", err)
+		return schema, nil
+	}
+	ttl := config.SchemaTTL
+	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to cache schema: %v\n", err)
+	}
 
 	return schema, nil
 }
@@ -144,9 +162,17 @@ func (c *Client) GetTableMetadata(project, dataset, table string) (*TableMetadat
 	}
 
 	// Cache the result
-	data, _ := json.Marshal(metadata)
-	ttl := 15 * time.Minute // Metadata changes moderately
-	c.cache.Set(cacheKey, string(data), &ttl)
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to marshal metadata for caching: %v\n", err)
+		return metadata, nil
+	}
+	ttl := config.MetadataTTL
+	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
+		// Log error but don't fail - continue without caching
+		fmt.Printf("Warning: failed to cache metadata: %v\n", err)
+	}
 
 	return metadata, nil
 }
@@ -236,16 +262,7 @@ func (c *Client) InvalidateCache(project, dataset, table string) error {
 
 // FormatSize formats bytes in human readable format
 func FormatSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	return utils.FormatBytes(bytes)
 }
 
 // FormatTime formats Unix timestamp to readable format

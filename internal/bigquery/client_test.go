@@ -2,14 +2,14 @@ package bigquery
 
 import (
 	"testing"
-	"time"
 
 	"bqs/internal/cache"
+	"bqs/internal/utils"
 )
 
 func TestClient(t *testing.T) {
 	// Create a cache for testing
-	c, err := cache.New(5 * time.Minute)
+	c, err := utils.NewCache()
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}

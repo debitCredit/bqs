@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/table"
@@ -12,7 +11,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"bqs/internal/bigquery"
-	"bqs/internal/cache"
+	"bqs/internal/config"
+	"bqs/internal/utils"
+	"bqs/internal/validation"
 )
 
 var browseCmd = &cobra.Command{
@@ -37,12 +38,13 @@ func init() {
 func runBrowse(cmd *cobra.Command, args []string) error {
 	input := args[0]
 
-	// Parse input - could be project.dataset or project.dataset.table
-	parts := strings.Split(input, ".")
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid format: expected project.dataset or project.dataset.table, got %s", input)
+	// Validate input format
+	if err := validation.ValidateProjectDatasetTable(input); err != nil {
+		return fmt.Errorf("invalid input: %w", err)
 	}
 
+	// Parse input - could be project.dataset or project.dataset.table
+	parts := strings.Split(input, ".")
 	project := parts[0]
 	dataset := parts[1]
 	var table string
@@ -51,7 +53,7 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize cache and BigQuery client
-	c, err := cache.New(15 * time.Minute)
+	c, err := utils.NewCache()
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -143,67 +145,20 @@ func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client
 	return nil
 }
 
-// browserState represents the current view state
-type browserState int
-
-const (
-	stateLoading browserState = iota
-	stateTableList
-	stateTableDetail
-	stateError
-)
-
-// browserModel is the main Bubble Tea model
-type browserModel struct {
-	state   browserState
-	project string
-	dataset string
-	table   string
-	client  *bigquery.Client
-
-	// Table list state
-	tables     []bigquery.TableInfo
-	tableModel table.Model // Bubbletea table component
-
-	// Table detail state
-	metadata *bigquery.TableMetadata
-
-	// Schema tree state
-	schemaNodes    []schemaNode
-	selectedSchema int
-	expandedNodes  map[string]bool
-
-	// Cache state (lazy loading)
-	cachedMetadata map[string]*bigquery.TableMetadata
-
-	// UI state
-	loading bool
-	err     error
-	width   int
-	height  int
-}
-
-// schemaNode represents a node in the schema tree
-type schemaNode struct {
-	Field       bigquery.SchemaField
-	Path        string // Unique path for tracking expansion state
-	Level       int    // Nesting level for indentation
-	HasChildren bool
-}
 
 func newBrowserModel(project, dataset, tableName string, client *bigquery.Client) *browserModel {
 	// Initialize the table component with simple, fast columns
 	columns := []table.Column{
-		{Title: "Cache", Width: 5},     // Prefetch status
-		{Title: "Table", Width: 35},    // Table name
-		{Title: "Type", Width: 8},      // Table type
-		{Title: "Created", Width: 20},  // Creation time (always available)
+		{Title: "Cache", Width: config.CacheColumnWidth},
+		{Title: "Table", Width: config.TableColumnWidth},
+		{Title: "Type", Width: config.TypeColumnWidth},
+		{Title: "Created", Width: config.CreatedColumnWidth},
 	}
 
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithFocused(true),
-		table.WithHeight(20),
+		table.WithHeight(config.DefaultTableHeight),
 	)
 
 	// Apply styling
@@ -261,8 +216,8 @@ func (m *browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update table model height based on available space
 		if m.state == stateTableList {
 			tableHeight := m.height - 8 // Account for header, footer, padding
-			if tableHeight < 5 {
-				tableHeight = 5
+			if tableHeight < config.MinTableHeight {
+				tableHeight = config.MinTableHeight
 			}
 			m.tableModel.SetHeight(tableHeight)
 		}
@@ -431,215 +386,10 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *browserModel) renderLoading() string {
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Height(m.height).
-		Align(lipgloss.Center, lipgloss.Center).
-		Render("🔄 Loading BigQuery metadata...")
-}
 
-func (m *browserModel) renderTableList() string {
-	var content strings.Builder
 
-	// Header
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("86")).
-		Padding(0, 1)
 
-	content.WriteString(headerStyle.Render(fmt.Sprintf("📊 %s.%s", m.project, m.dataset)))
-	content.WriteString("\n\n")
 
-	// Table list using Bubbletea Table component
-	if m.loading {
-		// Show loading while data is being fetched
-		content.WriteString("🔄 Loading tables...")
-	} else if len(m.tables) == 0 {
-		content.WriteString("No tables found in this dataset")
-	} else {
-		// Render the table component
-		content.WriteString(m.tableModel.View())
-	}
-
-	// Footer
-	content.WriteString("\n")
-	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 1)
-
-	footer := "⌨️  [↑↓] Navigate • [Enter] Explore • [q] Quit • ✓ = Cached"
-	content.WriteString(footerStyle.Render(footer))
-
-	return content.String()
-}
-
-func (m *browserModel) renderTableDetail() string {
-	if m.metadata == nil {
-		if m.loading {
-			return lipgloss.NewStyle().
-				Width(m.width).
-				Height(m.height).
-				Align(lipgloss.Center, lipgloss.Center).
-				Render("🔄 Loading table metadata...")
-		}
-		return "No metadata available"
-	}
-
-	var content strings.Builder
-
-	// Header
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("86")).
-		Padding(0, 1)
-
-	icon := bigquery.GetTableTypeIcon(m.metadata.Type)
-	content.WriteString(headerStyle.Render(fmt.Sprintf("%s %s.%s.%s", icon, m.project, m.dataset, m.table)))
-	content.WriteString("\n\n")
-
-	// Metadata
-	metaStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("244")).
-		Padding(0, 1)
-
-	size := bigquery.FormatSize(m.metadata.NumBytes)
-	lastMod := bigquery.FormatTime(m.metadata.LastModifiedTime)
-
-	meta := fmt.Sprintf("📊 %d rows • 💾 %s • 🕒 Modified %s",
-		m.metadata.NumRows, size, lastMod)
-	content.WriteString(metaStyle.Render(meta))
-	content.WriteString("\n\n")
-
-	// Schema
-	if m.metadata.Schema != nil && len(m.schemaNodes) > 0 {
-		schemaStyle := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("39")).
-			Padding(0, 1)
-
-		content.WriteString(schemaStyle.Render("🌲 Schema:"))
-		content.WriteString("\n\n")
-
-		for i, node := range m.schemaNodes {
-			selected := i == m.selectedSchema
-
-			var style lipgloss.Style
-			if selected {
-				style = lipgloss.NewStyle().
-					Background(lipgloss.Color("62")).
-					Foreground(lipgloss.Color("230")).
-					Padding(0, 1)
-			} else {
-				style = lipgloss.NewStyle().Padding(0, 1)
-			}
-
-			// Build indentation
-			indent := strings.Repeat("  ", node.Level)
-
-			// Build tree connector
-			connector := "├─"
-			if node.Level == 0 {
-				connector = "├─"
-			} else {
-				connector = "├─"
-			}
-
-			// Build expansion indicator
-			expandIcon := ""
-			if node.HasChildren {
-				if m.expandedNodes[node.Path] {
-					expandIcon = "▼ "
-				} else {
-					expandIcon = "▶ "
-				}
-			} else {
-				expandIcon = "  "
-			}
-
-			// Build mode indicator
-			mode := ""
-			if node.Field.Mode == "REQUIRED" {
-				mode = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(" REQUIRED")
-			} else if node.Field.Mode == "REPEATED" {
-				mode = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(" REPEATED")
-			}
-
-			// Build type with color
-			typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(node.Field.Type)
-
-			line := fmt.Sprintf("%s%s%s%s %s%s", indent, connector, expandIcon, node.Field.Name, typeStyle, mode)
-			content.WriteString(style.Render(line))
-			content.WriteString("\n")
-		}
-	}
-
-	// Footer
-	content.WriteString("\n")
-	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 1)
-
-	footer := "⌨️  [↑↓] Navigate • [Space/→] Expand • [←] Collapse • [b] Back • [q] Quit"
-	content.WriteString(footerStyle.Render(footer))
-
-	return content.String()
-}
-
-func (m *browserModel) renderError() string {
-	errorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("196")).
-		Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196"))
-
-	return errorStyle.Render(fmt.Sprintf("❌ Error: %s\n\nPress [q] to quit", m.err.Error()))
-}
-
-// buildSchemaTree constructs the flattened schema tree for display
-func (m *browserModel) buildSchemaTree() {
-	if m.metadata == nil || m.metadata.Schema == nil {
-		return
-	}
-
-	m.schemaNodes = []schemaNode{}
-	m.buildSchemaNodesRecursive(m.metadata.Schema.Fields, "", 0)
-
-	// Reset selection if it's out of bounds
-	if m.selectedSchema >= len(m.schemaNodes) {
-		m.selectedSchema = 0
-	}
-}
-
-// buildSchemaNodesRecursive recursively builds schema nodes with proper expansion state
-func (m *browserModel) buildSchemaNodesRecursive(fields []bigquery.SchemaField, parentPath string, level int) {
-	for _, field := range fields {
-		// Build unique path for this field
-		var path string
-		if parentPath == "" {
-			path = field.Name
-		} else {
-			path = parentPath + "." + field.Name
-		}
-
-		// Check if this field has nested fields
-		hasChildren := len(field.Fields) > 0
-
-		// Add this field to the nodes
-		node := schemaNode{
-			Field:       field,
-			Path:        path,
-			Level:       level,
-			HasChildren: hasChildren,
-		}
-		m.schemaNodes = append(m.schemaNodes, node)
-
-		// If this node is expanded and has children, add them recursively
-		if hasChildren && m.expandedNodes[path] {
-			m.buildSchemaNodesRecursive(field.Fields, path, level+1)
-		}
-	}
-}
 
 // updateTableRows populates the Bubbletea table component with current table data
 func (m *browserModel) updateTableRows() {
@@ -703,38 +453,3 @@ func (m *browserModel) checkCacheStatus() {
 	}
 }
 
-// Messages for async operations
-type tableListLoadedMsg struct {
-	tables []bigquery.TableInfo
-}
-
-type tableMetadataLoadedMsg struct {
-	metadata *bigquery.TableMetadata
-}
-
-
-type errorMsg struct {
-	err error
-}
-
-// Commands for async operations
-func loadTableList(client *bigquery.Client, project, dataset string) tea.Cmd {
-	return tea.Cmd(func() tea.Msg {
-		// Always start with fast basic table list
-		tables, err := client.ListTables(project, dataset)
-		if err != nil {
-			return errorMsg{err}
-		}
-		return tableListLoadedMsg{tables}
-	})
-}
-
-func loadTableMetadata(client *bigquery.Client, project, dataset, table string) tea.Cmd {
-	return tea.Cmd(func() tea.Msg {
-		metadata, err := client.GetTableMetadata(project, dataset, table)
-		if err != nil {
-			return errorMsg{err}
-		}
-		return tableMetadataLoadedMsg{metadata}
-	})
-}

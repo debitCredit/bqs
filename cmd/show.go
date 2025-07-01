@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	
+	"bqs/internal/validation"
 )
 
 var (
@@ -57,9 +59,14 @@ func init() {
 func runShow(cmd *cobra.Command, args []string) error {
 	fullTableID := args[0]
 	
+	// Validate input format
+	if err := validation.ValidateProjectDatasetTable(fullTableID); err != nil {
+		return fmt.Errorf("invalid input: %w", err)
+	}
+	
 	parts := strings.Split(fullTableID, ".")
 	if len(parts) < 3 {
-		return fmt.Errorf("invalid table format: expected project.dataset.table, got %s", fullTableID)
+		return fmt.Errorf("show command requires project.dataset.table format, got %s", fullTableID)
 	}
 	
 	projectID := parts[0]

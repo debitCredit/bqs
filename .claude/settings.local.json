@@ -7,7 +7,9 @@
       "Bash(git commit:*)",
       "Bash(bq help:*)",
       "Bash(go test:*)",
-      "Bash(go get:*)"
+      "Bash(go get:*)",
+      "Bash(rg:*)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }
