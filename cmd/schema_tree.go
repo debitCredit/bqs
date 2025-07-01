@@ -64,9 +64,10 @@ func (m *browserModel) renderSchemaTree() string {
 		var style lipgloss.Style
 		if selected {
 			style = lipgloss.NewStyle().
-				Background(lipgloss.Color("62")).
-				Foreground(lipgloss.Color("230")).
-				Padding(0, 1)
+				Background(selectedBg).
+				Foreground(selectedFg).
+				Padding(0, 1).
+				Bold(true)
 		} else {
 			style = lipgloss.NewStyle().Padding(0, 1)
 		}
@@ -89,16 +90,31 @@ func (m *browserModel) renderSchemaTree() string {
 			expandIcon = "  "
 		}
 
-		// Build mode indicator
+		// Build mode indicator with enhanced colors
 		mode := ""
 		if node.Field.Mode == "REQUIRED" {
-			mode = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(" REQUIRED")
+			mode = lipgloss.NewStyle().Foreground(primaryRed).Bold(true).Render(" REQUIRED")
 		} else if node.Field.Mode == "REPEATED" {
-			mode = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(" REPEATED")
+			mode = lipgloss.NewStyle().Foreground(accentOrange).Bold(true).Render(" REPEATED")
 		}
 
-		// Build type with color
-		typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(node.Field.Type)
+		// Build type with enhanced color
+		var typeColor lipgloss.Color
+		switch node.Field.Type {
+		case "STRING", "BYTES":
+			typeColor = primaryGreen
+		case "INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC":
+			typeColor = primaryBlue
+		case "BOOLEAN":
+			typeColor = primaryYellow
+		case "TIMESTAMP", "DATE", "TIME", "DATETIME":
+			typeColor = accentCyan
+		case "RECORD", "STRUCT":
+			typeColor = accentPurple
+		default:
+			typeColor = accentPurple
+		}
+		typeStyle := lipgloss.NewStyle().Foreground(typeColor).Bold(true).Render(node.Field.Type)
 
 		line := fmt.Sprintf("%s%s%s%s %s%s", indent, connector, expandIcon, node.Field.Name, typeStyle, mode)
 		content.WriteString(style.Render(line))

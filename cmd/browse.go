@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/table"
@@ -120,7 +121,7 @@ func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client
 	t := prettytable.NewWriter()
 	t.SetStyle(prettytable.StyleRounded)
 
-	t.AppendHeader(prettytable.Row{"", "Table", "Type", "Created"})
+	t.AppendHeader(prettytable.Row{"Table", "Type", "Created", "Cache"})
 
 	for _, tbl := range tables {
 		tableName := tbl.TableID
@@ -132,10 +133,10 @@ func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client
 		created := bigquery.FormatTime(tbl.CreationTime)
 
 		t.AppendRow(prettytable.Row{
-			icon,
 			tableName,
 			tbl.Type,
 			created,
+			icon, // Use icon as cache indicator for static view
 		})
 	}
 
@@ -147,12 +148,12 @@ func runStaticBrowse(project, dataset, tableName string, client *bigquery.Client
 
 
 func newBrowserModel(project, dataset, tableName string, client *bigquery.Client) *browserModel {
-	// Initialize the table component with simple, fast columns
+	// Initialize the table component with better column order
 	columns := []table.Column{
-		{Title: "Cache", Width: config.CacheColumnWidth},
 		{Title: "Table", Width: config.TableColumnWidth},
 		{Title: "Type", Width: config.TypeColumnWidth},
 		{Title: "Created", Width: config.CreatedColumnWidth},
+		{Title: "Cache", Width: config.CacheColumnWidth},
 	}
 
 	t := table.New(
@@ -161,17 +162,20 @@ func newBrowserModel(project, dataset, tableName string, client *bigquery.Client
 		table.WithHeight(config.DefaultTableHeight),
 	)
 
-	// Apply styling
+	// Apply enhanced styling
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(darkGray).
 		BorderBottom(true).
-		Bold(false)
+		Bold(true).
+		Foreground(primaryBlue)
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
+		Foreground(selectedFg).
+		Background(selectedBg).
+		Bold(true)
+	s.Cell = s.Cell.
+		Foreground(lightGray)
 	t.SetStyles(s)
 
 	model := &browserModel{
@@ -202,6 +206,12 @@ func (m *browserModel) Init() tea.Cmd {
 // Update implements tea.Model
 func (m *browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
+	// Clear expired status messages
+	if !m.statusTimeout.IsZero() && time.Now().After(m.statusTimeout) {
+		m.statusMessage = ""
+		m.statusTimeout = time.Time{}
+	}
 
 	// Update the table model for table list state
 	if m.state == stateTableList {
@@ -276,15 +286,90 @@ func (m *browserModel) View() string {
 		return m.renderTableDetail()
 	case stateError:
 		return m.renderError()
+	case stateHelp:
+		return m.renderHelp()
 	default:
 		return "Unknown state"
 	}
 }
 
 func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+	
+	// Handle help mode separately
+	if m.state == stateHelp {
+		switch key {
+		case "q", "ctrl+c", "?", "escape":
+			// These keys work in help mode - handle below
+		default:
+			// Ignore all other keys in help mode
+			return m, nil
+		}
+	}
+	
+	switch key {
 	case "q", "ctrl+c":
+		if m.state == stateHelp {
+			// Return to previous state when quitting from help
+			m.state = m.previousState
+			return m, nil
+		}
 		return m, tea.Quit
+
+	case "?":
+		if m.state != stateHelp {
+			// Show help overlay
+			m.previousState = m.state
+			m.state = stateHelp
+		} else {
+			// Hide help overlay
+			m.state = m.previousState
+		}
+		m.lastKey = ""
+		return m, nil
+
+	case "escape":
+		if m.state == stateHelp {
+			// Hide help overlay
+			m.state = m.previousState
+			m.lastKey = ""
+			return m, nil
+		}
+
+	case "g":
+		if m.lastKey == "g" { // gg sequence - jump to top
+			if m.state == stateTableList {
+				// Jump to top of table list
+				m.tableModel.GotoTop()
+			} else if m.state == stateTableDetail {
+				// Jump to top of schema
+				m.selectedSchema = 0
+			}
+			m.lastKey = ""
+			return m, nil
+		}
+		m.lastKey = "g"
+		return m, nil
+
+	case "G":
+		// Jump to bottom
+		if m.state == stateTableList {
+			// Jump to bottom of table list
+			m.tableModel.GotoBottom()
+		} else if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
+			// Jump to bottom of schema
+			m.selectedSchema = len(m.schemaNodes) - 1
+		}
+		m.lastKey = ""
+
+	case "y":
+		if m.lastKey == "y" { // yy sequence - copy table identifier
+			m.copyCurrentTable()
+			m.lastKey = ""
+			return m, nil
+		}
+		m.lastKey = "y"
+		return m, nil
 
 	case "up", "k":
 		// For table list, navigation is handled by the table model
@@ -292,6 +377,7 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateTableDetail && m.selectedSchema > 0 {
 			m.selectedSchema--
 		}
+		m.lastKey = ""
 
 	case "down", "j":
 		// For table list, navigation is handled by the table model
@@ -299,8 +385,10 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateTableDetail && m.selectedSchema < len(m.schemaNodes)-1 {
 			m.selectedSchema++
 		}
+		m.lastKey = ""
 
 	case "enter":
+		m.lastKey = ""
 		if m.state == stateTableList && len(m.tables) > 0 {
 			// Get selected table from the table model cursor
 			selectedIdx := m.tableModel.Cursor()
@@ -330,6 +418,7 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "space", "right", "l":
+		m.lastKey = ""
 		// Expand/collapse schema nodes
 		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
 			node := m.schemaNodes[m.selectedSchema]
@@ -340,6 +429,7 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "left", "h":
+		m.lastKey = ""
 		// Collapse current node or move to parent
 		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
 			node := m.schemaNodes[m.selectedSchema]
@@ -359,6 +449,7 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "b", "backspace":
+		m.lastKey = ""
 		if m.state == stateTableDetail {
 			// Check if we have table list data
 			if len(m.tables) == 0 {
@@ -381,6 +472,10 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.updateTableRows()
 			}
 		}
+		
+	default:
+		// Clear lastKey for any unhandled key
+		m.lastKey = ""
 	}
 
 	return m, nil
@@ -405,15 +500,15 @@ func (m *browserModel) updateTableRows() {
 			tableID = tbl.TableReference.TableID
 		}
 
-		// Add cache status indicator
+		// Add cache status indicator with color
 		cacheStatus := ""
 		if _, isCached := m.cachedMetadata[tableID]; isCached {
-			cacheStatus = "✓" // Cached
+			cacheStatus = "✓" // Cached - will be colored green in the view
 		}
 
 		// Always show basic, fast info - creation time is always available
 		created := bigquery.FormatTime(tbl.CreationTime)
-		rows[i] = table.Row{cacheStatus, tableID, tbl.Type, created}
+		rows[i] = table.Row{tableID, tbl.Type, created, cacheStatus}
 	}
 
 	m.tableModel.SetRows(rows)
@@ -451,5 +546,43 @@ func (m *browserModel) checkCacheStatus() {
 	if cacheUpdated {
 		m.updateTableRows()
 	}
+}
+
+// copyCurrentTable copies the current table identifier to clipboard
+func (m *browserModel) copyCurrentTable() {
+	var tableID string
+	
+	if m.state == stateTableList && len(m.tables) > 0 {
+		// Get selected table from table list
+		selectedIdx := m.tableModel.Cursor()
+		if selectedIdx >= 0 && selectedIdx < len(m.tables) {
+			table := m.tables[selectedIdx]
+			if table.TableID != "" {
+				tableID = table.TableID
+			} else {
+				tableID = table.TableReference.TableID
+			}
+			// Build full identifier
+			tableID = m.project + "." + m.dataset + "." + tableID
+		}
+	} else if m.state == stateTableDetail && m.table != "" {
+		// Use current table in detail view
+		tableID = m.project + "." + m.dataset + "." + m.table
+	}
+	
+	if tableID != "" {
+		// Copy to clipboard
+		if err := utils.CopyToClipboard(tableID); err != nil {
+			m.setStatusMessage("Clipboard not available (install xclip/xsel)")
+		} else {
+			m.setStatusMessage("Copied: " + tableID)
+		}
+	}
+}
+
+// setStatusMessage sets a temporary status message with timeout
+func (m *browserModel) setStatusMessage(message string) {
+	m.statusMessage = message
+	m.statusTimeout = time.Now().Add(3 * time.Second)
 }
 

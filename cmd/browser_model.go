@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"time"
+	
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/table"
 
@@ -15,6 +17,7 @@ const (
 	stateTableList
 	stateTableDetail
 	stateError
+	stateHelp
 )
 
 // browserModel is the main Bubble Tea model
@@ -45,6 +48,16 @@ type browserModel struct {
 	err     error
 	width   int
 	height  int
+	
+	// Vim-style navigation state
+	lastKey string // For tracking key sequences like 'gg'
+	
+	// Status message state
+	statusMessage string
+	statusTimeout time.Time
+	
+	// Help state
+	previousState browserState // Store previous state when showing help
 }
 
 // schemaNode represents a node in the schema tree
