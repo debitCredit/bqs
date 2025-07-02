@@ -60,8 +60,8 @@ func (m *browserModel) renderSchemaTree() string {
 
 	// Use filtered nodes if searching, otherwise use all nodes
 	nodesToShow := m.schemaNodes
-	if m.search.FilteredNodes != nil {
-		nodesToShow = m.search.FilteredNodes
+	if m.ui.Search.FilteredNodes != nil {
+		nodesToShow = m.ui.Search.FilteredNodes
 	}
 
 	for i, node := range nodesToShow {

@@ -13,6 +13,7 @@ import (
 
 	"bqs/internal/bigquery"
 	"bqs/internal/config"
+	"bqs/internal/errors"
 	"bqs/internal/utils"
 	"bqs/internal/validation"
 )
@@ -41,6 +42,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	// Validate input format
 	if err := validation.ValidateProjectDatasetTable(input); err != nil {
+		if bqsErr := errors.WrapValidationError(err, input); bqsErr != nil {
+			return fmt.Errorf("%s", bqsErr.UserFriendlyMessage())
+		}
 		return fmt.Errorf("invalid input: %w", err)
 	}
 
@@ -56,6 +60,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	// Initialize cache and BigQuery client
 	c, err := utils.NewCache()
 	if err != nil {
+		if cacheErr := errors.WrapCacheError(err, "initialize"); cacheErr != nil {
+			return fmt.Errorf("%s", cacheErr.UserFriendlyMessage())
+		}
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
 	defer c.Close()
@@ -187,6 +194,7 @@ func newBrowserModel(project, dataset, tableName string, client *bigquery.Client
 		tableModel:     t,
 		expandedNodes:  make(map[string]bool),
 		cachedMetadata: make(map[string]*bigquery.TableMetadata),
+		keyDispatcher:  NewKeyDispatcher(),
 	}
 
 	// Always start in loading state when data needs to be fetched
@@ -266,6 +274,28 @@ func (m *browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.state = stateError
 		return m, nil
+
+	case exportCompletedMsg:
+		if msg.success {
+			m.setStatusMessage(fmt.Sprintf("✓ Copied %s metadata to clipboard", msg.tableID))
+			
+			// Cache the metadata if it was fetched (only happens from dataset level export)
+			if msg.metadata != nil && m.state == stateTableList {
+				m.cachedMetadata[msg.tableID] = msg.metadata
+				// Update table rows to show the new cache status
+				if len(m.tables) > 0 {
+					m.updateTableRows()
+				}
+			}
+		} else {
+			// Display user-friendly error message with retry hint
+			errorMessage := msg.error
+			if msg.retryable {
+				errorMessage += " - try again in a moment"
+			}
+			m.setStatusMessage(fmt.Sprintf("✗ %s", errorMessage))
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -294,218 +324,10 @@ func (m *browserModel) View() string {
 }
 
 func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	
-	// Handle search mode FIRST - this takes priority
-	if m.search.Active {
-		return m.handleSearchInput(msg)
-	}
-	
-	// Handle command mode
-	if m.commandMode {
-		return m.handleCommandInput(msg)
-	}
-	
-	// Handle help mode separately
-	if m.state == stateHelp {
-		switch key {
-		case "q", "ctrl+c", "?", "escape":
-			// These keys work in help mode - handle below
-		default:
-			// Ignore all other keys in help mode
-			return m, nil
-		}
-	}
-	
-	switch key {
-	case "q", "ctrl+c":
-		if m.state == stateHelp {
-			// Return to previous state when quitting from help
-			m.state = m.previousState
-			return m, nil
-		}
-		return m, tea.Quit
-
-	case "?":
-		if m.state != stateHelp {
-			// Show help overlay
-			m.previousState = m.state
-			m.state = stateHelp
-		} else {
-			// Hide help overlay
-			m.state = m.previousState
-		}
-		m.lastKey = ""
-		return m, nil
-
-	case "/":
-		// Enter search mode (for table list and table detail)
-		if (m.state == stateTableList || m.state == stateTableDetail) && !m.search.Active {
-			m.search.Active = true
-			m.search.Query = ""
-			if m.state == stateTableList {
-				m.search.Context = SearchTables
-			} else {
-				m.search.Context = SearchSchema
-			}
-			m.lastKey = ""
-			return m, nil
-		}
-
-	case ":":
-		// Enter command mode
-		if !m.commandMode && !m.search.Active {
-			m.commandMode = true
-			m.commandQuery = ""
-			m.lastKey = ""
-			return m, nil
-		}
-
-	case "escape":
-		if m.state == stateHelp {
-			// Hide help overlay
-			m.state = m.previousState
-			m.lastKey = ""
-			return m, nil
-		}
-		// Note: search and command mode escapes are handled in their respective input handlers
-
-	case "g":
-		if m.lastKey == "g" { // gg sequence - jump to top
-			m.handleNavigation("top")
-			m.lastKey = ""
-			return m, nil
-		}
-		m.lastKey = "g"
-		return m, nil
-
-	case "G":
-		m.handleNavigation("bottom")
-		m.lastKey = ""
-
-	case "y":
-		if m.lastKey == "y" { // yy sequence - copy table identifier
-			m.copyCurrentTable()
-			m.lastKey = ""
-			return m, nil
-		}
-		m.lastKey = "y"
-		return m, nil
-
-	case "up", "k":
-		m.handleNavigation("up")
-		m.lastKey = ""
-
-	case "down", "j":
-		m.handleNavigation("down")
-		m.lastKey = ""
-
-	case "enter":
-		m.lastKey = ""
-		if m.state == stateTableList && len(m.tables) > 0 {
-			// Get selected table from the table model cursor
-			selectedIdx := m.tableModel.Cursor()
-			
-			// Use filtered tables if searching, otherwise use all tables
-			tablesToShow := m.tables
-			if m.search.FilteredTables != nil {
-				tablesToShow = m.search.FilteredTables
-			}
-			
-			if selectedIdx >= 0 && selectedIdx < len(tablesToShow) {
-				table := tablesToShow[selectedIdx]
-				tableID := table.TableID
-				if tableID == "" {
-					tableID = table.TableReference.TableID
-				}
-
-				m.table = tableID
-				
-				// Clear search state when navigating to table detail
-				m.clearSearchState()
-
-				// Check if we have real cached metadata (not just a placeholder)
-				if cached, exists := m.cachedMetadata[tableID]; exists && cached != nil && cached.Schema != nil {
-					// Use cached data immediately (real metadata, not placeholder)
-					m.metadata = cached
-					m.state = stateTableDetail
-					m.buildSchemaTree()
-					return m, nil
-				} else {
-					// Load metadata and cache it (this will be fast if persistently cached)
-					m.loading = true
-					m.state = stateLoading
-					return m, loadTableMetadata(m.client, m.project, m.dataset, tableID)
-				}
-			}
-		}
-
-	case "space", "right", "l":
-		m.lastKey = ""
-		// Expand/collapse schema nodes
-		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
-			node := m.schemaNodes[m.selectedSchema]
-			if node.HasChildren {
-				m.expandedNodes[node.Path] = !m.expandedNodes[node.Path]
-				m.buildSchemaTree() // Rebuild tree with new expansion state
-			}
-		}
-
-	case "left", "h":
-		m.lastKey = ""
-		// Collapse current node or move to parent
-		if m.state == stateTableDetail && len(m.schemaNodes) > 0 {
-			node := m.schemaNodes[m.selectedSchema]
-			if m.expandedNodes[node.Path] {
-				// Collapse current node
-				m.expandedNodes[node.Path] = false
-				m.buildSchemaTree()
-			} else if node.Level > 0 {
-				// Move to parent node
-				for i := m.selectedSchema - 1; i >= 0; i-- {
-					if m.schemaNodes[i].Level < node.Level {
-						m.selectedSchema = i
-						break
-					}
-				}
-			}
-		}
-
-	case "b", "backspace":
-		m.lastKey = ""
-		if m.state == stateTableDetail {
-			// Clear search state when navigating back to table list
-			m.clearSearchState()
-			
-			// Check if we have table list data
-			if len(m.tables) == 0 {
-				// Need to load table list first
-				m.loading = true
-				m.state = stateLoading
-				m.table = ""
-				m.metadata = nil
-				m.schemaNodes = nil
-				m.selectedSchema = 0
-				return m, loadTableList(m.client, m.project, m.dataset)
-			} else {
-				// Table list already loaded, just switch state
-				m.state = stateTableList
-				m.table = ""
-				m.metadata = nil
-				m.schemaNodes = nil
-				m.selectedSchema = 0
-				// Update table rows to reflect current cache status
-				m.updateTableRows()
-			}
-		}
-		
-	default:
-		// Clear lastKey for any unhandled key
-		m.lastKey = ""
-	}
-
-	return m, nil
+	// Delegate all key handling to the key dispatcher
+	return m.keyDispatcher.Dispatch(m, msg)
 }
+
 
 
 
@@ -516,8 +338,8 @@ func (m *browserModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *browserModel) updateTableRows() {
 	// Use filtered tables if searching, otherwise use all tables
 	tablesToShow := m.tables
-	if m.search.FilteredTables != nil {
-		tablesToShow = m.search.FilteredTables
+	if m.ui.Search.FilteredTables != nil {
+		tablesToShow = m.ui.Search.FilteredTables
 	}
 	
 	if len(tablesToShow) == 0 {
@@ -618,19 +440,66 @@ func (m *browserModel) setStatusMessage(message string) {
 	m.statusTimeout = time.Now().Add(config.StatusMessageTTL)
 }
 
+// exportTable initiates async export of the selected table's metadata
+func (m *browserModel) exportTable() (tea.Model, tea.Cmd) {
+	var tableID string
+	var tableMetadata *bigquery.TableMetadata
+	
+	// Determine which table to export based on current state
+	if m.state == stateTableList && len(m.tables) > 0 {
+		// Dataset level: export selected table
+		selectedIdx := m.tableModel.Cursor()
+		if selectedIdx >= 0 && selectedIdx < len(m.tables) {
+			table := m.tables[selectedIdx]
+			if table.TableID != "" {
+				tableID = table.TableID
+			} else {
+				tableID = table.TableReference.TableID
+			}
+		} else {
+			m.setStatusMessage("No table selected")
+			return m, nil
+		}
+	} else if m.state == stateTableDetail && m.table != "" {
+		// Table detail level: export current table
+		tableID = m.table
+		tableMetadata = m.metadata
+	} else {
+		m.setStatusMessage("Export only available when viewing tables")
+		return m, nil
+	}
+
+	if tableID == "" {
+		m.setStatusMessage("No table available to export")
+		return m, nil
+	}
+
+	// Show immediate feedback
+	if tableMetadata != nil {
+		// We have metadata already (table detail view) - export will be fast
+		m.setStatusMessage(fmt.Sprintf("Copying %s metadata to clipboard...", tableID))
+	} else {
+		// Need to fetch metadata (dataset level) - might take a moment
+		m.setStatusMessage(fmt.Sprintf("Fetching and copying %s metadata...", tableID))
+	}
+
+	// Start async export
+	return m, exportTableMetadata(m.client, m.project, m.dataset, tableID, tableMetadata)
+}
+
 // clearSearchState resets all search-related state
 func (m *browserModel) clearSearchState() {
-	m.search.Clear()
+	m.ui.ExitSpecialMode()
 }
 
 // selectCurrentSearchResult selects the currently highlighted item from search results
 // and maps it back to the full list for proper highlighting
 func (m *browserModel) selectCurrentSearchResult() {
-	if m.state == stateTableList && m.search.FilteredTables != nil && len(m.search.FilteredTables) > 0 {
+	if m.state == stateTableList && m.ui.Search.FilteredTables != nil && len(m.ui.Search.FilteredTables) > 0 {
 		// Get the currently selected item from filtered results
 		selectedIdx := m.tableModel.Cursor()
-		if selectedIdx >= 0 && selectedIdx < len(m.search.FilteredTables) {
-			selectedTable := m.search.FilteredTables[selectedIdx]
+		if selectedIdx >= 0 && selectedIdx < len(m.ui.Search.FilteredTables) {
+			selectedTable := m.ui.Search.FilteredTables[selectedIdx]
 			
 			// Find this table in the full list and set cursor there
 			for i, table := range m.tables {
@@ -649,10 +518,10 @@ func (m *browserModel) selectCurrentSearchResult() {
 				}
 			}
 		}
-	} else if m.state == stateTableDetail && m.search.FilteredNodes != nil && len(m.search.FilteredNodes) > 0 {
+	} else if m.state == stateTableDetail && m.ui.Search.FilteredNodes != nil && len(m.ui.Search.FilteredNodes) > 0 {
 		// Get the currently selected field from filtered results
-		if m.selectedSchema >= 0 && m.selectedSchema < len(m.search.FilteredNodes) {
-			selectedNode := m.search.FilteredNodes[m.selectedSchema]
+		if m.selectedSchema >= 0 && m.selectedSchema < len(m.ui.Search.FilteredNodes) {
+			selectedNode := m.ui.Search.FilteredNodes[m.selectedSchema]
 			
 			// Find this field in the full schema and set selection there
 			for i, node := range m.schemaNodes {
@@ -692,8 +561,8 @@ func (m *browserModel) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 		
 	case "backspace":
-		if len(m.search.Query) > 0 {
-			m.search.Query = m.search.Query[:len(m.search.Query)-1]
+		if len(m.ui.Search.Query) > 0 {
+			m.ui.Search.Query = m.ui.Search.Query[:len(m.ui.Search.Query)-1]
 			m.filterTables()
 			m.updateTableRows()
 		}
@@ -709,7 +578,7 @@ func (m *browserModel) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Add character to search query
 		if len(key) == 1 { // Only single printable characters (including space)
-			m.search.Query += key
+			m.ui.Search.Query += key
 			m.filterTables()
 			m.updateTableRows()
 		}
@@ -730,8 +599,8 @@ func (m *browserModel) handleNavigation(direction string) {
 		if m.state == stateTableDetail {
 			// Use filtered nodes count if searching, otherwise use all nodes
 			maxNodes := len(m.schemaNodes)
-			if m.search.FilteredNodes != nil {
-				maxNodes = len(m.search.FilteredNodes)
+			if m.ui.Search.FilteredNodes != nil {
+				maxNodes = len(m.ui.Search.FilteredNodes)
 			}
 			if m.selectedSchema < maxNodes-1 {
 				m.selectedSchema++
@@ -751,8 +620,8 @@ func (m *browserModel) handleNavigation(direction string) {
 			m.tableModel.GotoBottom()
 		} else if m.state == stateTableDetail {
 			maxNodes := len(m.schemaNodes)
-			if m.search.FilteredNodes != nil {
-				maxNodes = len(m.search.FilteredNodes)
+			if m.ui.Search.FilteredNodes != nil {
+				maxNodes = len(m.ui.Search.FilteredNodes)
 			}
 			if maxNodes > 0 {
 				m.selectedSchema = maxNodes - 1
@@ -763,17 +632,17 @@ func (m *browserModel) handleNavigation(direction string) {
 
 // filterTables filters the table list based on the search query
 func (m *browserModel) filterTables() {
-	if m.search.Query == "" {
-		m.search.FilteredTables = nil
-		m.search.FilteredNodes = nil
+	if m.ui.Search.Query == "" {
+		m.ui.Search.FilteredTables = nil
+		m.ui.Search.FilteredNodes = nil
 		return
 	}
 	
-	query := strings.ToLower(m.search.Query)
+	query := strings.ToLower(m.ui.Search.Query)
 	
 	// Filter tables if in table list view
-	if m.search.Context == SearchTables && len(m.tables) > 0 {
-		m.search.FilteredTables = make([]bigquery.TableInfo, 0)
+	if m.ui.Search.Context == SearchTables && len(m.tables) > 0 {
+		m.ui.Search.FilteredTables = make([]bigquery.TableInfo, 0)
 		for _, table := range m.tables {
 			tableID := table.TableID
 			if tableID == "" {
@@ -782,82 +651,24 @@ func (m *browserModel) filterTables() {
 			
 			// Simple substring search (case-insensitive)
 			if strings.Contains(strings.ToLower(tableID), query) {
-				m.search.FilteredTables = append(m.search.FilteredTables, table)
+				m.ui.Search.FilteredTables = append(m.ui.Search.FilteredTables, table)
 			}
 		}
 	}
 	
 	// Filter schema nodes if in table detail view
-	if m.search.Context == SearchSchema && len(m.schemaNodes) > 0 {
-		m.search.FilteredNodes = make([]schemaNode, 0)
+	if m.ui.Search.Context == SearchSchema && len(m.schemaNodes) > 0 {
+		m.ui.Search.FilteredNodes = make([]schemaNode, 0)
 		for _, node := range m.schemaNodes {
 			// Search in field name and field type
 			fieldName := strings.ToLower(node.Field.Name)
 			fieldType := strings.ToLower(node.Field.Type)
 			
 			if strings.Contains(fieldName, query) || strings.Contains(fieldType, query) {
-				m.search.FilteredNodes = append(m.search.FilteredNodes, node)
+				m.ui.Search.FilteredNodes = append(m.ui.Search.FilteredNodes, node)
 			}
 		}
 	}
 }
 
-// handleCommandInput handles keyboard input in command mode
-func (m *browserModel) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	
-	// Check for escape using multiple methods (robust escape detection)
-	if key == "escape" || key == "esc" || msg.Type == tea.KeyEscape {
-		// Cancel command mode and clear command query
-		m.commandMode = false
-		m.commandQuery = ""
-		return m, nil
-	}
-	
-	switch key {
-	case "enter":
-		// Execute command
-		m.commandMode = false
-		m.executeCommand(m.commandQuery)
-		m.commandQuery = ""
-		return m, nil
-		
-	case "ctrl+c", "ctrl+g":
-		// Cancel command
-		m.commandMode = false
-		m.commandQuery = ""
-		return m, nil
-		
-	case "backspace":
-		if len(m.commandQuery) > 0 {
-			m.commandQuery = m.commandQuery[:len(m.commandQuery)-1]
-		}
-		return m, nil
-		
-	default:
-		// Add character to command query
-		if len(key) == 1 { // Only single printable characters
-			m.commandQuery += key
-		}
-		return m, nil
-	}
-}
-
-// executeCommand executes the entered command
-func (m *browserModel) executeCommand(command string) {
-	switch command {
-	case "q", "quit":
-		// Note: This won't work in the model, we'd need to return tea.Quit
-		m.setStatusMessage("Use 'q' key to quit")
-	case "copy":
-		m.copyCurrentTable()
-	case "help", "h":
-		m.setStatusMessage("Available commands: copy, quit, help")
-	case "":
-		// Empty command, do nothing
-		return
-	default:
-		m.setStatusMessage(fmt.Sprintf("Unknown command: '%s'. Available: copy, quit, help", command))
-	}
-}
 

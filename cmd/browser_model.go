@@ -1,12 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 	
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/table"
 
 	"bqs/internal/bigquery"
+	"bqs/internal/errors"
+	"bqs/internal/utils"
 )
 
 // browserState represents the current view state
@@ -18,8 +22,14 @@ const (
 	stateTableDetail
 	stateError
 	stateHelp
-	stateSearch
-	stateCommand
+)
+
+// UIMode represents the current input/interaction mode
+type UIMode int
+
+const (
+	modeNormal UIMode = iota
+	modeSearch
 )
 
 // browserModel is the main Bubble Tea model
@@ -42,13 +52,16 @@ type browserModel struct {
 	selectedSchema int
 	expandedNodes  map[string]bool
 
-	// Search state
-	search SearchState
+	// Consolidated UI interaction state
+	ui UIState
+	
+	// Key handling
+	keyDispatcher *KeyDispatcher
 
 	// Cache state (lazy loading)
 	cachedMetadata map[string]*bigquery.TableMetadata
 
-	// UI state
+	// UI rendering state
 	loading bool
 	err     error
 	width   int
@@ -63,10 +76,6 @@ type browserModel struct {
 	
 	// Help state
 	previousState browserState // Store previous state when showing help
-	
-	// Command mode state
-	commandMode  bool
-	commandQuery string
 }
 
 // schemaNode represents a node in the schema tree
@@ -84,6 +93,38 @@ const (
 	SearchTables SearchContext = iota
 	SearchSchema
 )
+
+// UIState consolidates all user interface interaction state
+type UIState struct {
+	Mode           UIMode
+	Search         SearchState
+}
+
+// IsSearchMode returns true if currently in search mode
+func (ui *UIState) IsSearchMode() bool {
+	return ui.Mode == modeSearch
+}
+
+
+// IsNormalMode returns true if currently in normal interaction mode
+func (ui *UIState) IsNormalMode() bool {
+	return ui.Mode == modeNormal
+}
+
+// EnterSearchMode switches to search mode and activates search state
+func (ui *UIState) EnterSearchMode(context SearchContext) {
+	ui.Mode = modeSearch
+	ui.Search.Active = true
+	ui.Search.Context = context
+	ui.Search.Query = ""
+}
+
+
+// ExitSpecialMode returns to normal mode and clears all special state
+func (ui *UIState) ExitSpecialMode() {
+	ui.Mode = modeNormal
+	ui.Search.Clear()
+}
 
 // SearchState encapsulates all search-related state and behavior
 type SearchState struct {
@@ -135,6 +176,14 @@ type errorMsg struct {
 	err error
 }
 
+type exportCompletedMsg struct {
+	tableID   string
+	success   bool
+	error     string
+	retryable bool
+	metadata  *bigquery.TableMetadata // Include metadata for caching
+}
+
 // Commands for async operations
 func loadTableList(client *bigquery.Client, project, dataset string) tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
@@ -154,5 +203,85 @@ func loadTableMetadata(client *bigquery.Client, project, dataset, table string) 
 			return errorMsg{err}
 		}
 		return tableMetadataLoadedMsg{metadata}
+	})
+}
+
+func exportTableMetadata(client *bigquery.Client, project, dataset, tableID string, existingMetadata *bigquery.TableMetadata) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		var tableMetadata *bigquery.TableMetadata
+		var err error
+		
+		// Use existing metadata if available, otherwise fetch it
+		if existingMetadata != nil {
+			tableMetadata = existingMetadata
+		} else {
+			tableMetadata, err = client.GetTableMetadata(project, dataset, tableID)
+			if err != nil {
+				// Determine if error is retryable and get user-friendly message
+				errorMessage := err.Error()
+				retryable := false
+				
+				if bqsErr, ok := err.(*errors.BQSError); ok {
+					errorMessage = bqsErr.UserFriendlyMessage()
+					retryable = bqsErr.IsRetryable()
+				}
+				
+				return exportCompletedMsg{
+					tableID:   tableID,
+					success:   false,
+					error:     errorMessage,
+					retryable: retryable,
+					metadata:  nil,
+				}
+			}
+		}
+
+		// Create comprehensive export data structure
+		exportData := struct {
+			Project     string                    `json:"project"`
+			Dataset     string                    `json:"dataset"`
+			TableID     string                    `json:"table_id"`
+			FullTableID string                    `json:"full_table_id"`
+			Type        string                    `json:"type"`
+			Metadata    *bigquery.TableMetadata   `json:"metadata"`
+			ExportedAt  string                    `json:"exported_at"`
+		}{
+			Project:     project,
+			Dataset:     dataset,
+			TableID:     tableID,
+			FullTableID: fmt.Sprintf("%s.%s.%s", project, dataset, tableID),
+			Type:        tableMetadata.Type,
+			Metadata:    tableMetadata,
+			ExportedAt:  time.Now().Format(time.RFC3339),
+		}
+
+		// Marshal to JSON with pretty formatting  
+		jsonData, err := json.MarshalIndent(exportData, "", "  ")
+		if err != nil {
+			return exportCompletedMsg{
+				tableID:   tableID,
+				success:   false,
+				error:     "Failed to generate JSON export",
+				retryable: false,
+				metadata:  nil,
+			}
+		}
+
+		// Copy to clipboard
+		if err := utils.CopyToClipboard(string(jsonData)); err != nil {
+			return exportCompletedMsg{
+				tableID:   tableID,
+				success:   false,
+				error:     "Clipboard not available (install xclip/xsel/pbcopy)",
+				retryable: false,
+				metadata:  nil,
+			}
+		}
+
+		return exportCompletedMsg{
+			tableID:  tableID,
+			success:  true,
+			metadata: tableMetadata,
+		}
 	})
 }

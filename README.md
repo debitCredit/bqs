@@ -1,10 +1,10 @@
 # BQS - BigQuery Schema Tool
 
-A fast, interactive CLI tool for exploring BigQuery datasets and tables with intelligent caching and a beautiful terminal interface.
+A fast, interactive CLI tool for exploring BigQuery datasets and tables with intelligent caching, robust error handling, and a beautiful terminal interface.
 
 ## Overview
 
-BQS is a Go-based command-line tool that transforms BigQuery exploration from complex bash scripts into an intuitive, interactive experience. It features persistent caching, a terminal-based UI, and multiple exploration modes.
+BQS is a Go-based command-line tool that transforms BigQuery exploration from complex bash scripts into an intuitive, interactive experience. It features persistent caching, production-grade error handling with automatic retries, a terminal-based UI, and multiple exploration modes.
 
 ## Features
 
@@ -28,14 +28,21 @@ BQS is a Go-based command-line tool that transforms BigQuery exploration from co
 - **Automatic Cleanup**: Expired entries are automatically removed
 - **Cache Status**: Always know what's cached vs. fresh from BigQuery
 
-### 🎛️ Vim-Style Command Mode
-- **Colon Commands**: Press `:` to enter command mode with discoverable commands
-- **Available Commands**: `:copy` (copy table ID), `:quit` (exit), `:help` (show commands)
-- **Visual Feedback**: Command bar shows available options and current input
-- **Consistent UX**: Works in both table list and schema detail views
+### 🛡️ Robust Error Handling
+- **User-Friendly Messages**: Clear, actionable error descriptions with context
+- **Intelligent Retry**: Automatic retry for transient failures (network, quota, timeouts)
+- **Error Classification**: Structured errors with appropriate handling (auth, permissions, not found)
+- **Graceful Degradation**: Operations continue even when caching fails
+- **Installation Guidance**: Helpful hints for missing dependencies (clipboard tools, auth)
+
+### ⌨️ Efficient Single-Key Operations
+- **Vim-Style Navigation**: hjkl, gg/G for top/bottom, / for search
+- **Quick Actions**: yy to copy table ID, e to export metadata, ? for help
+- **No Modal Complexity**: Streamlined interface focused on speed and efficiency
+- **Discoverable**: Context-sensitive help shows all available shortcuts
 
 ### 🎯 Multiple Commands
-- `browse` - Interactive dataset exploration with TUI, search, and command mode
+- `browse` - Interactive dataset exploration with TUI and fuzzy search
 - `show` - Display table metadata with optional editor integration
 - `schema` - Pretty-print table schemas with nested field support
 

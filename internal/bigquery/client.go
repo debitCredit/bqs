@@ -1,6 +1,7 @@
 package bigquery
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 
 	"bqs/internal/cache"
 	"bqs/internal/config"
+	"bqs/internal/errors"
+	"bqs/internal/retry"
 	"bqs/internal/utils"
 )
 
@@ -75,7 +78,7 @@ type TableMetadata struct {
 	Schema *Schema `json:"schema,omitempty"`
 }
 
-// ListTables retrieves tables in a dataset with caching
+// ListTables retrieves tables in a dataset with caching and retry logic
 func (c *Client) ListTables(project, dataset string) ([]TableInfo, error) {
 	cacheKey := cache.TableListKey(project, dataset)
 
@@ -87,8 +90,18 @@ func (c *Client) ListTables(project, dataset string) ([]TableInfo, error) {
 		}
 	}
 
-	// Cache miss or invalid data, fetch from BigQuery
-	tables, err := c.fetchTableList(project, dataset)
+	// Cache miss or invalid data, fetch from BigQuery with retry
+	var tables []TableInfo
+	ctx := context.Background()
+	err := retry.WithQuickRetry(ctx, "list tables", func() error {
+		var fetchErr error
+		tables, fetchErr = c.fetchTableList(project, dataset)
+		if fetchErr != nil {
+			return errors.WrapBigQueryError(fetchErr, "list_tables", project, dataset, "")
+		}
+		return nil
+	})
+	
 	if err != nil {
 		return nil, err
 	}
@@ -96,20 +109,24 @@ func (c *Client) ListTables(project, dataset string) ([]TableInfo, error) {
 	// Cache the result
 	data, err := json.Marshal(tables)
 	if err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to marshal table list for caching: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "marshal table list"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 		return tables, nil
 	}
 	ttl := config.TableListTTL
 	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to cache table list: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "set table list cache"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 	}
 
 	return tables, nil
 }
 
-// GetSchema retrieves table schema with caching
+// GetSchema retrieves table schema with caching and retry logic
 func (c *Client) GetSchema(project, dataset, table string) (*Schema, error) {
 	cacheKey := cache.SchemaKey(project, dataset, table)
 
@@ -121,8 +138,18 @@ func (c *Client) GetSchema(project, dataset, table string) (*Schema, error) {
 		}
 	}
 
-	// Cache miss, fetch from BigQuery
-	schema, err := c.fetchSchema(project, dataset, table)
+	// Cache miss, fetch from BigQuery with retry
+	var schema *Schema
+	ctx := context.Background()
+	err := retry.WithDefaultRetry(ctx, "get schema", func() error {
+		var fetchErr error
+		schema, fetchErr = c.fetchSchema(project, dataset, table)
+		if fetchErr != nil {
+			return errors.WrapBigQueryError(fetchErr, "get_schema", project, dataset, table)
+		}
+		return nil
+	})
+	
 	if err != nil {
 		return nil, err
 	}
@@ -130,20 +157,24 @@ func (c *Client) GetSchema(project, dataset, table string) (*Schema, error) {
 	// Cache the result
 	data, err := json.Marshal(schema)
 	if err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to marshal schema for caching: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "marshal schema"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 		return schema, nil
 	}
 	ttl := config.SchemaTTL
 	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to cache schema: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "set schema cache"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 	}
 
 	return schema, nil
 }
 
-// GetTableMetadata retrieves complete table metadata with caching
+// GetTableMetadata retrieves complete table metadata with caching and retry logic
 func (c *Client) GetTableMetadata(project, dataset, table string) (*TableMetadata, error) {
 	cacheKey := cache.MetadataKey(project, dataset, table)
 
@@ -155,8 +186,18 @@ func (c *Client) GetTableMetadata(project, dataset, table string) (*TableMetadat
 		}
 	}
 
-	// Cache miss, fetch from BigQuery
-	metadata, err := c.fetchTableMetadata(project, dataset, table)
+	// Cache miss, fetch from BigQuery with retry
+	var metadata *TableMetadata
+	ctx := context.Background()
+	err := retry.WithDefaultRetry(ctx, "get table metadata", func() error {
+		var fetchErr error
+		metadata, fetchErr = c.fetchTableMetadata(project, dataset, table)
+		if fetchErr != nil {
+			return errors.WrapBigQueryError(fetchErr, "get_metadata", project, dataset, table)
+		}
+		return nil
+	})
+	
 	if err != nil {
 		return nil, err
 	}
@@ -164,14 +205,18 @@ func (c *Client) GetTableMetadata(project, dataset, table string) (*TableMetadat
 	// Cache the result
 	data, err := json.Marshal(metadata)
 	if err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to marshal metadata for caching: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "marshal metadata"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 		return metadata, nil
 	}
 	ttl := config.MetadataTTL
 	if err := c.cache.Set(cacheKey, string(data), &ttl); err != nil {
-		// Log error but don't fail - continue without caching
-		fmt.Printf("Warning: failed to cache metadata: %v\n", err)
+		// Log cache error but don't fail - continue without caching
+		if cacheErr := errors.WrapCacheError(err, "set metadata cache"); cacheErr != nil {
+			fmt.Printf("Warning: %s\n", cacheErr.UserFriendlyMessage())
+		}
 	}
 
 	return metadata, nil
